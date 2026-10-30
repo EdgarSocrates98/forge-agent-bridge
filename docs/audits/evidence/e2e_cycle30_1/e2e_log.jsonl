@@ -1,0 +1,38 @@
+{"ts": 1793365839.45524, "step": "boot", "note": "starting PF API :8470 + bridge :8471 + portal static :4200"}
+{"ts": 1793365839.486596, "step": "boot", "note": "all up", "pair_token_present": true}
+{"ts": 1793365839.4877806, "step": "check", "name": "status-no-auth-401", "ok": true, "detail": "got 401"}
+{"ts": 1793365839.4891455, "step": "check", "name": "pair-bad-token-403", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'invalid pair token'}}"}
+{"ts": 1793365839.4905877, "step": "check", "name": "pair-exchange-201", "ok": true, "detail": "got 201"}
+{"ts": 1793365839.4906707, "step": "pair", "device": "dev_a4f54ff31c02", "scopes": ["agent"]}
+{"ts": 1793365839.492226, "step": "check", "name": "providers-list", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.493325, "step": "check", "name": "devin-session-201", "ok": false, "detail": "got 502 {'error': {'code': 'FAB-QUOTA', 'message': 'local runner quota 8 reached'}}"}
+{"ts": 1793365839.4933755, "step": "session", "sid": "", "acp_ref": "", "context_version": null}
+{"ts": 1793365839.4945762, "step": "check", "name": "devin-prompt-200", "ok": false, "detail": "got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}"}
+{"ts": 1793365839.4959128, "step": "check", "name": "devin-streamed-answer", "ok": false, "detail": "text='' kinds=[]"}
+{"ts": 1793365839.495997, "step": "check", "name": "devin-usage-event", "ok": false, "detail": "kinds=[]"}
+{"ts": 1793365839.4960244, "step": "check", "name": "devin-turn-complete", "ok": false, "detail": "kinds=[]"}
+{"ts": 1793365839.496049, "step": "devin-events", "count": 0, "kinds": [], "usage": []}
+{"ts": 1793365839.4971669, "step": "check", "name": "sse-stream", "ok": false, "detail": "HTTP Error 404: Not Found"}
+{"ts": 1793365839.4983137, "step": "check", "name": "devin-close-200", "ok": false, "detail": "got 404"}
+{"ts": 1793365839.4995475, "step": "check", "name": "devin-resume-201", "ok": false, "detail": "got 422 {'error': {'code': 'FAB-VALIDATION', 'message': 'session_ref required'}}"}
+{"ts": 1793365839.4995995, "step": "resume", "new_sid": null, "ref": ""}
+{"ts": 1793365839.501555, "step": "check", "name": "upload-needs-approval-409", "ok": true, "detail": "got 409"}
+{"ts": 1793365839.5016112, "step": "approval-minted", "approval_id": "ap_cf19d66cc29c8c8d", "resource": "file:e2e/test.txt", "action": "upload"}
+{"ts": 1793365839.5026002, "step": "check", "name": "approvals-listed", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.5040014, "step": "check", "name": "approval-denied", "ok": true, "detail": "got 200 {'resolved': True, 'granted': False, 'approval_id': 'ap_cf19d66cc29c8c8d'}"}
+{"ts": 1793365839.5051272, "step": "check", "name": "denied-still-409", "ok": true, "detail": "got 409"}
+{"ts": 1793365839.5062482, "step": "check", "name": "approval-granted-token", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.5079722, "step": "check", "name": "upload-approved-200", "ok": true, "detail": "got 200 {'path': 'e2e/test.txt', 'size': 11, 'saved': True}"}
+{"ts": 1793365839.5092928, "step": "check", "name": "replay-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
+{"ts": 1793365839.5106328, "step": "check", "name": "tamper-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
+{"ts": 1793365839.512546, "step": "check", "name": "context-attach-200", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.5142035, "step": "check", "name": "context-revoke-200", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.5153265, "step": "check", "name": "revoked-prompt-403", "ok": false, "detail": "got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}"}
+{"ts": 1793365839.516764, "step": "check", "name": "audit-events", "ok": false, "detail": "missing={'approval.consumed', 'approval.requested', 'session.create', 'approval.resolved'}"}
+{"ts": 1793365839.5186806, "step": "check", "name": "pf-health", "ok": true, "detail": "got 200"}
+{"ts": 1793365839.7300835, "step": "check", "name": "pf-products", "ok": true, "detail": "got 200 names={'Customer Analytics', 'Payments API'}"}
+{"ts": 1793365839.7321093, "step": "check", "name": "pf-knowledge-cited", "ok": false, "detail": "got 422"}
+{"ts": 1793365839.7321846, "step": "pf-citation", "chunk": null}
+{"ts": 1793365844.313369, "step": "check", "name": "portal-sessions-visible", "ok": false, "detail": "session titles not found in DOM"}
+{"ts": 1793365844.380779, "step": "check", "name": "portal-js-errors", "ok": true, "detail": ""}
+{"ts": 1793365844.746548, "step": "done", "failures": ["devin-session-201: got 502 {'error': {'code': 'FAB-QUOTA', 'message': 'local runner quota 8 reached'}}", "devin-prompt-200: got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}", "devin-streamed-answer: text='' kinds=[]", "devin-usage-event: kinds=[]", "devin-turn-complete: kinds=[]", "sse-stream: HTTP Error 404: Not Found", "devin-close-200: got 404", "devin-resume-201: got 422 {'error': {'code': 'FAB-VALIDATION', 'message': 'session_ref required'}}", "revoked-prompt-403: got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}", "audit-events: missing={'approval.consumed', 'approval.requested', 'session.create', 'approval.resolved'}", "pf-knowledge-cited: got 422", "portal-sessions-visible: session titles not found in DOM"]}

@@ -55,19 +55,41 @@ def test_adapter_capability_gates():
     from forge_agent_bridge.providers.acp_adapter import AcpAdapter
     from forge_agent_bridge.providers.codex import CodexAdapter
     a = AcpAdapter("devin", ["devin", "acp"])
-    for fn in (lambda: a.resume_session("x"),
-               lambda: a.respond_to_approval("a", True)):
-        try:
-            fn()
-            raise AssertionError("expected unsupported")
-        except UnsupportedCapabilityError:
-            pass
+    try:
+        a.respond_to_approval("a", True)
+        raise AssertionError("expected unsupported")
+    except UnsupportedCapabilityError:
+        pass
     c = CodexAdapter()
     try:
         c.respond_to_approval("a", True)
         raise AssertionError("expected unsupported")
     except UnsupportedCapabilityError:
         pass
+
+
+def test_acp_adapter_resume_and_async_stream():
+    """§4.3 — AcpAdapter against a fake ACP server: async prompt streams
+    deltas before the response resolves; session/load resumes."""
+    import pathlib
+    import sys
+
+    from forge_agent_bridge.providers.acp_adapter import AcpAdapter
+
+    srv = str(pathlib.Path(__file__).parent / "fake_acp_server.py")
+    a = AcpAdapter("devin", [sys.executable, srv])
+    s = a.create_session()
+    assert s.provider_session_ref == "acp-sess-1" and s.resumable is True
+    a.send_prompt(s.id, "hi")
+    events = list(a.stream_events(s.id))
+    kinds = [e["type"] for e in events]
+    assert kinds == ["content_delta", "content_delta", "usage", "turn_complete"]
+    assert events[-1]["params"]["stop_reason"] == "end_turn"
+    assert events[-1]["params"]["usage"]["totalTokens"] == 12
+    assert events[-2]["params"]["total"] == 12
+    r = a.resume_session("acp-sess-1")
+    assert r.provider_session_ref == "acp-sess-1" and r.resumable is True
+    a.dispose()
 
 
 def test_metadata_store(tmp_path):

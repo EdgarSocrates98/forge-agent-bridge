@@ -57,6 +57,12 @@ def test_capability_states_honest(srv) -> None:
         for c in p["capabilities"]:
             # resume/subagents not live-homologated must not read supported
             if c["name"] in ("subagents", "session-resume"):
+                # devin session-resume IS live-homologated (2026-10-30):
+                # ACP session/load + adapter impl + transcript in
+                # docs/audits/evidence/devin_acp_20261030T093504.jsonl
+                if p["id"] == "devin" and c["name"] == "session-resume":
+                    assert c["state"] == "supported"
+                    continue
                 assert c["state"] in {"unverified", "unsupported",
                                       "requires-authentication"}, \
                     f"{p['id']}.{c['name']}={c['state']}"

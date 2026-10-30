@@ -57,7 +57,9 @@ class AcpClient:
             else:
                 self._notifications.append(msg)
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def request_async(self, method: str,
+                      params: dict[str, Any] | None = None) -> int:
+        """Send a request without waiting; returns the request id."""
         if not self.proc or not self.proc.stdin:
             raise BridgeError("FAB-TRANSPORT", "client not started")
         rid = next(_ids)
@@ -66,15 +68,27 @@ class AcpClient:
             json.dumps({"jsonrpc": "2.0", "id": rid, "method": method,
                         "params": params or {}}).encode() + b"\n")
         self.proc.stdin.flush()
+        return rid
+
+    def response_ready(self, rid: int) -> dict[str, Any] | None:
+        return self._pending.get(rid) or None
+
+    def resolve(self, rid: int) -> dict[str, Any]:
+        """Pop a ready response; raises on RPC error."""
+        resp = self._pending.pop(rid, {})
+        if "error" in resp:
+            e = resp["error"]
+            raise BridgeError(f"FAB-RPC-{e.get('code', 'ERR')}",
+                              str(e.get("message", e)))
+        return resp.get("result", {})
+
+    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        rid = self.request_async(method, params)
         import time
         deadline = time.monotonic() + self.timeout_s
         while time.monotonic() < deadline:
-            resp = self._pending.get(rid) or {}
-            if resp:
-                if "error" in resp:
-                    e = resp["error"]
-                    raise BridgeError(f"FAB-RPC-{e.get('code', 'ERR')}", str(e.get("message", e)))
-                return resp.get("result", {})
+            if self.response_ready(rid):
+                return self.resolve(rid)
             time.sleep(0.01)
         self._pending.pop(rid, None)
         raise BridgeError("FAB-TIMEOUT", f"{method} timed out after {self.timeout_s}s")
@@ -123,6 +137,21 @@ class AcpClient:
         return self.request("session/prompt", {
             "sessionId": session_id,
             "prompt": [{"type": "text", "text": text}]})
+
+    def prompt_async(self, session_id: str, text: str) -> int:
+        """Start a turn without blocking — notifications stream while the
+        response is in flight. Resolve via resolve(rid)."""
+        return self.request_async("session/prompt", {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": text}]})
+
+    def load_session(self, session_id: str, cwd: str = ".",
+                     mcp_servers: list[dict] | None = None) -> dict[str, Any]:
+        """ACP session/load — resumes a previous session, replaying its
+        transcript as session/update notifications."""
+        return self.request("session/load", {
+            "sessionId": session_id, "cwd": cwd,
+            "mcpServers": mcp_servers or []})
 
     def cancel(self, session_id: str) -> None:
         self.notify("session/cancel", {"sessionId": session_id})

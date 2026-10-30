@@ -56,6 +56,7 @@ class AcpAdapter:
         self._clients: dict[str, AcpClient] = {}
         self._acp_ids: dict[str, str] = {}   # bridge sid → acp sessionId
         self._sessions: dict[str, AgentSession] = {}
+        self._turn_rids: dict[str, int] = {}  # bridge sid → in-flight prompt rid
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -105,19 +106,36 @@ class AcpAdapter:
         except Exception:
             client.close()
             raise
+        s = self._register(client, acp_sid, kw, resumable=True)
+        return s
+
+    def _register(self, client: AcpClient, acp_sid: str, kw: dict[str, Any],
+                  resumable: bool) -> AgentSession:
         s = AgentSession(id=new_id("ses"), provider=self.provider_id,
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),
-                         state=SessionState.ACTIVE, resumable=False,
+                         state=SessionState.ACTIVE, resumable=resumable,
                          provider_session_ref=acp_sid)
         self._clients[s.id] = client
         self._acp_ids[s.id] = acp_sid
         self._sessions[s.id] = s
         return s
 
-    def resume_session(self, session_ref: str) -> AgentSession:
-        raise UnsupportedCapabilityError("session-resume",
-                                         provider=self.provider_id)
+    def resume_session(self, session_ref: str, **kw: Any) -> AgentSession:
+        """Resume a provider session via ACP `session/load` — verified live
+        against `devin acp` (modes/config returned; transcript replays as
+        session/update notifications)."""
+        self.initialize()
+        client = AcpClient(self.cmd, timeout_s=self.timeout_s)
+        client.start()
+        try:
+            client.initialize()
+            client.load_session(session_ref, cwd=kw.get("cwd") or ".",
+                                mcp_servers=kw.get("mcp_servers"))
+        except Exception:
+            client.close()
+            raise
+        return self._register(client, session_ref, kw, resumable=True)
 
     def list_sessions(self) -> list[AgentSession]:
         return list(self._sessions.values())
@@ -130,12 +148,40 @@ class AcpAdapter:
         if attachments:
             raise UnsupportedCapabilityError("attachments",
                                              provider=self.provider_id)
-        client.prompt(self._acp_ids[session_id], prompt)
+        self._turn_rids[session_id] = client.prompt_async(
+            self._acp_ids[session_id], prompt)
 
     def stream_events(self, session_id: str) -> Iterator[dict[str, Any]]:
+        """Yield mapped session/update events as they arrive; terminates
+        with `turn_complete` (stopReason + usage) when the in-flight
+        prompt resolves, or when the agent process exits."""
+        import time
         client = self._require(session_id)
-        for notif in client.drain_notifications():
-            yield _map_acp_update(notif)
+        rid = self._turn_rids.pop(session_id, None)
+        deadline = time.monotonic() + self.timeout_s
+        while True:
+            for notif in client.drain_notifications():
+                yield _map_acp_update(notif)
+            if rid is not None and client.response_ready(rid):
+                result = client.resolve(rid)
+                u = result.get("usage") or {}
+                if u:
+                    yield {"type": "usage", "params": {
+                        "tokens_in": u.get("inputTokens"),
+                        "tokens_out": u.get("outputTokens"),
+                        "total": u.get("totalTokens"),
+                        "raw_usage": u}}
+                yield {"type": "turn_complete",
+                       "params": {"stop_reason": result.get("stopReason"),
+                                  "usage": u}}
+                return
+            if client.proc and client.proc.poll() is not None:
+                return
+            if time.monotonic() > deadline:
+                raise BridgeError("FAB-TIMEOUT",
+                                  f"turn exceeded {self.timeout_s}s",
+                                  provider=self.provider_id)
+            time.sleep(0.02)
 
     def respond_to_approval(self, approval_id: str, approved: bool) -> None:
         # ACP permission requests arrive as fs/terminal client methods — not
@@ -148,6 +194,7 @@ class AcpAdapter:
     def close_session(self, session_id: str) -> None:
         client = self._clients.pop(session_id, None)
         self._acp_ids.pop(session_id, None)
+        self._turn_rids.pop(session_id, None)
         if session_id in self._sessions:
             self._sessions[session_id].state = SessionState.CLOSED
         if client:

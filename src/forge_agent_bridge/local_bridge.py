@@ -419,13 +419,23 @@ def make_app() -> Any:
                                 actor=auth.get("actor", "local"),
                                 resource=f"file:{rel}", action=act,
                                 args=op_args, risk="high")
+                            audit.emit("approval.requested",
+                                       auth.get("actor", "local"),
+                                       approval_id=req["approval_id"],
+                                       resource=req["resource"],
+                                       op=req["action"],
+                                       session=req["session_id"])
                             return self._send(409, {"error": {
                                 "code": "FAB-APPROVAL-REQUIRED",
                                 "message": "approval required"},
                                 "approval_request": req})
-                        approvals.consume(
+                        consumed = approvals.consume(
                             tok, session_id=str(body.get("session_id", "")),
                             resource=f"file:{rel}", action=act, args=op_args)
+                        audit.emit("approval.consumed",
+                                   auth.get("actor", "local"),
+                                   approval_id=consumed["approval_id"],
+                                   resource=f"file:{rel}", op=act)
                         if act == "upload":
                             data = base64.b64decode(
                                 body.get("content_b64", ""))
@@ -553,7 +563,7 @@ def make_app() -> Any:
                             parts[1],
                             approved=bool(body.get("approved")),
                             actor=auth.get("actor", "local"))
-                        audit.emit("approval.resolve",
+                        audit.emit("approval.resolved",
                                    auth.get("actor", "local"),
                                    approval_id=parts[1],
                                    approved=bool(body.get("approved")))
@@ -638,10 +648,13 @@ def make_app() -> Any:
                     args = {"path": str(src)}
                     # one-time approval token: retry with it to execute
                     if body.get("approval_token"):
-                        approvals.consume(
+                        consumed = approvals.consume(
                             str(body["approval_token"]),
                             session_id="backup", resource=str(src),
                             action="restore", args=args)
+                        audit.emit("approval.consumed", actor,
+                                   approval_id=consumed["approval_id"],
+                                   resource=str(src), op="restore")
                         audit.emit("backup.restore", actor, backup=str(src))
                         return self._send(200, {
                             "restore": restore_backup(src, state_dir())})
@@ -649,6 +662,10 @@ def make_app() -> Any:
                         session_id="backup", actor=actor,
                         resource=str(src), action="restore", args=args,
                         scope="workspace", risk="high")
+                    audit.emit("approval.requested", actor,
+                               approval_id=req["approval_id"],
+                               resource=req["resource"],
+                               op=req["action"], session="backup")
                     return self._send(200, {"restore": "approval-required",
                                             "approval_request": req})
                 return self._send(404, {"error": {"code": "FAB-NOT-FOUND",

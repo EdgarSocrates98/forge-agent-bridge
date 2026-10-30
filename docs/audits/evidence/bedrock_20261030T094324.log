@@ -1,0 +1,10 @@
+# Bedrock homologation attempt 2026-10-30T09:43:24-03:00
+## sts
+{
+    "UserId": "702561771161",
+    "Account": "702561771161",
+    "Arn": "arn:aws:iam::702561771161:root"
+}
+
+## adapter call (PF_BEDROCK_REGION=sa-east-1, model=anthropic.claude-sonnet-4-5-20250929-v1:0)
+{"error": {"code": "PF-PROVIDER", "message": "ValidationException", "detail": "An error occurred (ValidationException) when calling the Converse operation: Invocation of model ID anthropic.claude-sonnet-4-5-20250929-v1:0 with on-demand throughput isn\u2019t supported. Retry your requ", "state": "unavailable:ValidationException"}}

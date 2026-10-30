@@ -186,6 +186,7 @@ NATIVE_MAP: dict[str, str] = {
     "tool_call": "tool.started",
     "tool_result": "tool.completed",
     "plan_update": "plan.updated",
+    "turn_complete": "turn.completed",
     "request_permission": "approval.requested",
     "permission_response": "approval.resolved",
     "usage": "usage.updated",

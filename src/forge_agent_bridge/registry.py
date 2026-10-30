@@ -67,15 +67,16 @@ CATALOG: dict[str, dict[str, Any]] = {
         "name": "Devin CLI",
         "executable": "devin",
         "kind": "cli-acp",
-        # mechanism: `devin acp` (ACP/JSON-RPC, verified on installed CLI)
+        # mechanism: `devin acp` (ACP/JSON-RPC, verified live 2026-10-30 —
+        # transcript docs/audits/evidence/devin_acp_20261030T093504.jsonl)
         "capabilities": _caps(
             chat="SUPPORTED", streaming="SUPPORTED",
-            session_resume="UNVERIFIED", cancel="UNVERIFIED",
+            session_resume="SUPPORTED", cancel="UNVERIFIED",
             tool_calling="UNVERIFIED", mcp="UNVERIFIED",
             files="UNVERIFIED", approvals="UNVERIFIED",
             images="UNSUPPORTED", models="UNVERIFIED",
             subagents="UNVERIFIED", plans="UNVERIFIED",
-            usage="UNVERIFIED", cloud_handoff="UNVERIFIED"),
+            usage="SUPPORTED", cloud_handoff="UNVERIFIED"),
     },
     "fake": {
         "name": "Fake Provider (tests)",

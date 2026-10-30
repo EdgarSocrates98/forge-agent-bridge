@@ -12,11 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Install
         run: pip install -e ".[dev]"
       - name: Lint
-        run: ruff check src tests
+        run: python -m ruff check src tests
       - name: Tests
         run: python -m pytest -q
 
@@ -26,18 +26,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Install
         run: pip install -e .
       - name: Dependency audit
         run: |
           pip install pip-audit
-          pip-audit --desc on || echo "pip-audit findings reported (non-blocking until triaged)"
-      - name: SBOM
+          pip-audit --desc on
+      - name: SBOM (CycloneDX)
         run: |
           pip install cyclonedx-bom
-          cyclonedx-py environment -o sbom.json --of JSON
-          echo "SBOM generated: $(wc -c < sbom.json) bytes"
+          cyclonedx-py environment --output-format JSON --outfile sbom.json
+          ls -l sbom.json
       - uses: actions/upload-artifact@v4
         with:
           name: sbom

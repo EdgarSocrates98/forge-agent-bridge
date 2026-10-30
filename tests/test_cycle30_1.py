@@ -5,8 +5,8 @@ from __future__ import annotations
 import threading
 
 import pytest
-from conftest import _req
 
+from conftest import _req
 from forge_agent_bridge.adapter import BridgeError
 from forge_agent_bridge.approvals import ApprovalStore
 from forge_agent_bridge.context import ContextStore, ProductAgentSessionContext

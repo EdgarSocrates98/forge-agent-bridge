@@ -55,7 +55,28 @@ when visibility is `workspace`.
 
 Append-only trail (`audit.emit`) for: `session.create`, `session.approve`,
 `session.share`, `session.handoff`, `runner.register`,
-`runner.deregister`, `budget.limit`. Read via `GET /audit` (`X-Tail` cap).
+`runner.deregister`, `budget.limit`, `context.attach`, `context.delta`,
+`context.revoked`, `pair.*`, `device.revoked`, `authorization.denied`.
+Read via `GET /audit` (`X-Tail` cap).
+
+## Cycle 30.1 decisions
+
+- **Pairing persistence — Option A (ephemeral sessions).** Session tokens
+  and revocation lists live in memory only. A bridge restart invalidates
+  every session token; the Portal detects `401` and must re-run
+  `/pair/exchange`. Deliberate trade: no credential material at rest
+  beyond the 0600 master token, at the cost of re-pairing on restart.
+- **Approval consumption is atomic.** `ApprovalStore.resolve`/`consume`
+  hold a `threading.Lock`; a grant can only be consumed once, by the
+  requesting actor (when the caller supplies `actor`), against the exact
+  argument digest — replay across session/resource/op is denied.
+- **Origin policy.** Full-origin checks: scheme `http|https` + loopback
+  host + valid port, plus exact entries via `FAB_ALLOWED_ORIGINS`.
+  Malformed origins, non-web schemes and external hosts are rejected.
+- **Context revocation.** `POST /context/revoke` sets `trust=revoked`;
+  `assert_allowed` denies every dependent op immediately. Restricted
+  tools (`files:write`, `process:spawn`, `mcp:invoke`, …) are
+  deny-by-default — an empty allowlist never means unrestricted for them.
 
 ## Secrets
 

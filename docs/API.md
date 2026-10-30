@@ -200,3 +200,39 @@ Windows: `day`, `month`. Checked before every prompt; exhaustion → 429.
 | `FAB-NOT-FOUND` / `FAB-404` | unknown session/route |
 | `FAB-BUDGET-*` | budget exhausted |
 | `FAB-ERROR` | adapter/provider/transport failure |
+
+## Cycle 26–28 additions
+
+### Streaming (§26.6)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/agent-sessions/{id}/stream?after_seq=N` | SSE; `id: <seq>` cursor, `Last-Event-ID` honored, `: hb` heartbeats, ~55s bounded → reconnect with cursor |
+
+### Context (§27)
+| Method | Path | Body → Result |
+|---|---|---|
+| GET | `/agent-sessions/{id}/context` | → bound `forge/ProductAgentSessionContext/v1` |
+| POST | `/context/draft` | context fields → draft context (identity bound to actor) |
+| POST | `/context/attach` | `{session_id, context}` → rebind + audit |
+| POST | `/context/delta` | `forge/AgentContextDelta/v1` → `{recorded, review}` |
+| GET | `/context/deltas?product_id=&review=` | → `{items}` |
+
+### MCP federation (§27.5)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/mcp` | list `forge/MCPServerDescriptor/v1` entries |
+| POST | `/mcp` | register `{server_id, name, capabilities, ...}` |
+| POST | `/mcp/{id}/health` | `{health}` → verified/unverified/error |
+
+Session create accepts `context` (bound at birth, `mcp_registry` allowlist)
+and `mcp_servers` (filtered through federation trust → `mcp_denied`).
+
+### Recovery (§28.2)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/agent-sessions/{id}/recovery` | `forge/SessionRecoveryPlan/v1` — mode: native-resume / context-rebuild / read-only-history / non-resumable |
+
+### Durable events (§28.3)
+Events persist to `~/.forge-bridge/events/{sid}.jsonl` (0600): seq, id, ts,
+session/turn/provider, redacted payload. Replay without duplication;
+retention writes a `session.retention-trim` marker — never silent loss.

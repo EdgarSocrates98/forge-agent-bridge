@@ -203,6 +203,7 @@ def test_sse_cors_headers(srv):
     must allow Last-Event-ID — both were missing (found via real
     Chromium fetch in e2e/test_chat_streaming)."""
     import http.client
+
     from forge_agent_bridge import local_bridge
     local_bridge._ALLOWED_ORIGINS.add("http://127.0.0.1:4200")
     port, tok = srv
@@ -223,3 +224,42 @@ def test_sse_cors_headers(srv):
     c.close()
     assert r.getheader("Access-Control-Allow-Origin") == \
         "http://127.0.0.1:4200"
+
+
+def test_diagnostics_endpoint_shape(srv):
+    port, tok = srv
+    st, body = _req(port, tok, "GET", "/diagnostics")
+    assert st == 200
+    assert body["schema"] == "forge/DiagnosticReport/1"
+    assert body["bridge"]["version"]
+    assert body["bridge"]["state_dir"]
+    ids = [p["id"] for p in body["providers"]]
+    assert "fake" in ids and "codex" in ids
+    fake = next(p for p in body["providers"] if p["id"] == "fake")
+    assert fake["installed"] is True
+    assert "chat" in fake["capabilities"]
+    assert "sessions" in body and "checks" in body
+    names = [c["name"] for c in body["checks"]]
+    assert "state-dir" in names and "event-store" in names
+
+
+def test_mcp_doctor_classifies(srv):
+    port, tok = srv
+    st, _ = _req(port, tok, "POST", "/mcp", {
+        "schema": "forge/MCPServerDescriptor/1",
+        "server_id": "test-broken", "name": "Broken",
+        "endpoint": "invalid-transport",
+        "trust": "revoked", "capabilities": [], "required_scopes": []})
+    assert st in (200, 201)
+    st, _ = _req(port, tok, "POST",
+                 "/mcp/test-broken/health",
+                 {"health": "error"})
+    assert st == 200
+    st, body = _req(port, tok, "GET", "/mcp/doctor")
+    assert st == 200
+    items = {i["server_id"]: i for i in body["items"]}
+    broken = items["test-broken"]
+    assert broken["state"] == "error"
+    classes = {c["class"] for c in broken["checks"] if "class" in c}
+    assert "credential" in classes and "config" in classes
+    assert broken["corrective"]

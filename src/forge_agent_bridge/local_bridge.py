@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .adapter import BridgeError
+from .contracts import utcnow
 
 STATE_DIR = Path.home() / ".forge-bridge"
 MAX_BODY = 8 * 1024 * 1024          # 8 MiB request cap (§25.5)
@@ -284,6 +285,125 @@ def make_app() -> Any:
             meta.upsert(sid, pf_verify=f"revoked:{state}")
             raise BridgeError("FAB-FORBIDDEN",
                               f"product context {state}")
+
+    # -- §30.2 Diagnostic Center helpers -------------------------------------
+    def _fab_version() -> str:
+        from . import __version__ as v
+        return v
+
+    def _pfmode() -> str:
+        from .pf_context import PFContextClient
+        return PFContextClient.mode()
+
+    def _next_action(pid: str, installed: bool, auth: Any) -> str:
+        a = str(getattr(auth, "value", auth or ""))
+        if not installed:
+            return "install-cli"
+        if "unavailable" in a or a in ("unverified", ""):
+            return {
+                "claude-code": "run `claude login`",
+                "codex": "verify CODEX_HOME / mcp config",
+                "devin": "verify DEVIN_API_KEY",
+                "copilot": "verify `gh auth status`",
+                "bedrock": "verify AWS credentials/account access",
+            }.get(pid, "recheck")
+        return "none"
+
+    def _mcp_doctor_items() -> list[dict[str, Any]]:
+        """§8.3 — per-server real checks with error classification
+        (host|mcp|credential|provider|network|config)."""
+        import shutil
+        items = []
+        for d in mcp_fed.list():
+            sid = d.get("server_id", "")
+            checks: list[dict[str, str]] = []
+            endpoint = d.get("endpoint", "stdio")
+            trust = d.get("trust", "unverified")
+            health = d.get("health", "unverified")
+            checks.append({"check": "discovery", "state": "ok",
+                           "detail": "registered"})
+            # executable: known forge binaries get a real PATH probe
+            exe = {"product-forge": "productforge",
+                   "forge-lens": "forge-lens",
+                   "data-sentinel": "data-sentinel"}.get(sid)
+            if exe:
+                path = shutil.which(exe)
+                checks.append({"check": "executable",
+                               "state": "ok" if path else "error",
+                               "detail": path or f"{exe} not on PATH",
+                               "class": "host" if not path else ""})
+            if trust == "revoked":
+                checks.append({"check": "authentication",
+                               "state": "error",
+                               "detail": "trust revoked",
+                               "class": "credential"})
+            elif trust == "unverified":
+                checks.append({"check": "authentication",
+                               "state": "warn",
+                               "detail": "trust unverified",
+                               "class": "credential"})
+            else:
+                checks.append({"check": "authentication",
+                               "state": "ok", "detail": trust})
+            checks.append({"check": "transport",
+                           "state": "ok" if endpoint in
+                           ("stdio", "http", "local-lib") else "error",
+                           "detail": endpoint,
+                           "class": "" if endpoint in
+                           ("stdio", "http", "local-lib") else "config"})
+            if health == "error":
+                checks.append({"check": "health", "state": "error",
+                               "detail": "reported error",
+                               "class": "mcp"})
+            elif health == "unverified":
+                checks.append({"check": "health", "state": "warn",
+                               "detail": "not yet probed"})
+            else:
+                checks.append({"check": "health", "state": "ok",
+                               "detail": health})
+            worst = ("error" if any(c["state"] == "error" for c in checks)
+                     else "warn" if any(c["state"] == "warn"
+                                        for c in checks) else "ok")
+            items.append({"server_id": sid, "name": d.get("name", sid),
+                          "state": worst, "checks": checks,
+                          "corrective": _mcp_corrective(checks)})
+        return items
+
+    def _mcp_corrective(checks: list[dict[str, str]]) -> list[str]:
+        """§8.4 — safe corrective actions only; never mutate user config."""
+        out = []
+        for c in checks:
+            if c["state"] != "error":
+                continue
+            cls = c.get("class", "")
+            if cls == "host":
+                out.append("open configuration / install executable")
+            elif cls == "credential":
+                out.append("reauthenticate via official flow")
+            elif cls == "config":
+                out.append("review server configuration")
+            else:
+                out.append("view logs / recheck")
+        if not out:
+            out.append("recheck")
+        return out
+
+    def _self_checks() -> list[dict[str, Any]]:
+        """Real self-diagnostics: state dir, event store, PF linkage."""
+        out = []
+        sd = state_dir()
+        out.append({"name": "state-dir",
+                    "state": "ok" if sd.is_dir() else "error",
+                    "detail": str(sd)})
+        out.append({"name": "event-store",
+                    "state": "ok" if event_store.root.is_dir() else "error",
+                    "detail": str(event_store.root)})
+        out.append({"name": "pf-link",
+                    "state": "ok" if pf_client else "warn",
+                    "detail": (os.environ.get("FAB_PF_BASE_URL")
+                               if pf_client else "not configured"),
+                    "mode": _pfmode()})
+        return out
 
     class H(BaseHTTPRequestHandler):
         timeout = 30  # socket read timeout (§25.5 request timeout)
@@ -552,6 +672,53 @@ def make_app() -> Any:
                 return self._send(200, {"items": [
                     d.model_dump(mode="json")
                     for d in REGISTRY.detect_all()]})
+            # -- §30.2 unified Diagnostic Center -------------------------------
+            if self.command == "GET" and parts == ["diagnostics"]:
+                from .registry import REGISTRY
+                prov_items = []
+                for d in REGISTRY.detect_all():
+                    caps = {c.name: c.state.value for c in d.capabilities}
+                    auth = getattr(d, "auth_state", None)
+                    prov_items.append({
+                        "id": d.id, "name": d.name,
+                        "installed": bool(d.executable)
+                        or d.kind == "fake",
+                        "executable": d.executable,
+                        "version": getattr(d, "version", None),
+                        "authentication": str(getattr(
+                            auth, "value", auth or "unverified")),
+                        "protocol": getattr(d, "kind", ""),
+                        "capabilities": caps,
+                        "mcp_health": mcp_fed.get(d.id) or {},
+                        "last_test": None,
+                        "last_error": None,
+                        "next_action": _next_action(
+                            d.id, bool(d.executable), auth),
+                    })
+                return self._send(200, {
+                    "schema": "forge/DiagnosticReport/1",
+                    "generated_at": utcnow(),
+                    "bridge": {"version": _fab_version(),
+                               "state_dir": str(state_dir()),
+                               "pf_verify_mode": _pfmode()},
+                    "providers": prov_items,
+                    "sessions": {
+                        "active": sum(len(o.sessions)
+                                      for o in orchs.values()),
+                        "tracked": len(meta.list()),
+                    },
+                    "approvals": {"pending": sum(
+                        len(approvals.pending_for(s))
+                        for s in meta.list())},
+                    "budgets": budgets.summary(),
+                    "mcp_servers": _mcp_doctor_items(),
+                    "checks": _self_checks(),
+                })
+            if self.command == "GET" and parts == ["mcp", "doctor"]:
+                return self._send(200, {
+                    "schema": "forge/MCPDoctorReport/1",
+                    "generated_at": utcnow(),
+                    "items": _mcp_doctor_items()})
             # -- runners (§23.1) ------------------------------------------------
             if parts and parts[0] == "runners":
                 if self.command == "GET":

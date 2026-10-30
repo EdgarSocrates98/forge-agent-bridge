@@ -1,5 +1,7 @@
 """Cycle 19 — bridge foundation contract tests (fake provider per spec)."""
 
+import json
+
 
 def _fake():
     from forge_agent_bridge.providers.fake import FakeAdapter
@@ -108,3 +110,48 @@ for line in sys.stdin:
     pr = c.prompt(sid, "hi")
     assert pr["stopReason"] == "end_turn"
     srv.terminate()
+
+
+def test_local_bridge_auth_and_supervisor(tmp_path, monkeypatch):
+    """§6.4/19.5 — localhost service: auth gate + process cleanup."""
+    import http.client
+    import threading
+
+    from forge_agent_bridge import local_bridge
+
+    monkeypatch.setattr(local_bridge, "STATE_DIR", tmp_path / "fb")
+    tok = local_bridge.pair_token()
+    assert tok and (tmp_path / "fb" / "pair.token").exists()
+    handler, sup = local_bridge.make_app()
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        # unauth → 401
+        c = http.client.HTTPConnection("127.0.0.1", port)
+        c.request("GET", "/status")
+        assert c.getresponse().status == 401
+        # auth → 200
+        c.request("GET", "/status", headers={"Authorization": f"Bearer {tok}"})
+        assert c.getresponse().status == 200
+        # spawn supervised process, then terminate
+        c.request("POST", "/sessions",
+                  body='{"cmd": ["sleep", "30"]}',
+                  headers={"Authorization": f"Bearer {tok}",
+                           "Content-Type": "application/json"})
+        resp = json.loads(c.getresponse().read())
+        sid = resp["session_id"]
+        assert sid in sup.running()
+        c.request("DELETE", f"/sessions/{sid}",
+                  headers={"Authorization": f"Bearer {tok}"})
+        assert c.getresponse().status == 200
+        import time
+        for _ in range(50):
+            if sid not in sup.running():
+                break
+            time.sleep(0.05)
+        assert sid not in sup.running()
+    finally:
+        srv.shutdown()
+        sup.terminate_all()

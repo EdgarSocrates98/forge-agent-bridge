@@ -119,11 +119,16 @@ def main() -> int:
     PROCS.append(fab)
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
+        def send_head(self):  # SPA fallback — client-side routes -> index.html
+            if not os.path.isfile(self.translate_path(self.path)):
+                self.path = "/index.html"
+            return super().send_head()
+
         def log_message(self, *a):
             pass
     os.chdir(PORTAL_DIST)
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 4200), Quiet)
-    httpd.allow_reuse_address = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
     wait_http(BRIDGE + "/status")
@@ -283,7 +288,7 @@ def main() -> int:
           {"Payments API", "Customer Analytics"} <= names,
           f"got {st} names={names}")
     st, b = req(PFAPI, "/api/v1/products/prd_017179b95798/knowledge/query",
-                "POST", {"q": "vault timeout"}, token=pf_tok)
+                "POST", {"question": "vault timeout", "limit": 5}, token=pf_tok)
     cites = b.get("data", {}).get("citations", [])
     check("pf-knowledge-cited", st == 200 and bool(cites),
           f"got {st}")
@@ -307,7 +312,7 @@ def main() -> int:
                 localStorage.setItem('fab.sessionToken', bt);
                 localStorage.setItem('fab.deviceId', dev);
             }""", [PFAPI, pf_tok, BRIDGE, tok, "e2e-chromium"])
-            pg.goto(PORTAL + "/chat", wait_until="networkidle")
+            pg.goto(PORTAL + "/pf/chat", wait_until="networkidle")
             pg.wait_for_timeout(1500)
             pg.screenshot(path=str(shots / "01_chat_sessions.png"),
                           full_page=True)

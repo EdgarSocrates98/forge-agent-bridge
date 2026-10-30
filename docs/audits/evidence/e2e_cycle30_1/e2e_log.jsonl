@@ -1,38 +1,38 @@
-{"ts": 1793365839.45524, "step": "boot", "note": "starting PF API :8470 + bridge :8471 + portal static :4200"}
-{"ts": 1793365839.486596, "step": "boot", "note": "all up", "pair_token_present": true}
-{"ts": 1793365839.4877806, "step": "check", "name": "status-no-auth-401", "ok": true, "detail": "got 401"}
-{"ts": 1793365839.4891455, "step": "check", "name": "pair-bad-token-403", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'invalid pair token'}}"}
-{"ts": 1793365839.4905877, "step": "check", "name": "pair-exchange-201", "ok": true, "detail": "got 201"}
-{"ts": 1793365839.4906707, "step": "pair", "device": "dev_a4f54ff31c02", "scopes": ["agent"]}
-{"ts": 1793365839.492226, "step": "check", "name": "providers-list", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.493325, "step": "check", "name": "devin-session-201", "ok": false, "detail": "got 502 {'error': {'code': 'FAB-QUOTA', 'message': 'local runner quota 8 reached'}}"}
-{"ts": 1793365839.4933755, "step": "session", "sid": "", "acp_ref": "", "context_version": null}
-{"ts": 1793365839.4945762, "step": "check", "name": "devin-prompt-200", "ok": false, "detail": "got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}"}
-{"ts": 1793365839.4959128, "step": "check", "name": "devin-streamed-answer", "ok": false, "detail": "text='' kinds=[]"}
-{"ts": 1793365839.495997, "step": "check", "name": "devin-usage-event", "ok": false, "detail": "kinds=[]"}
-{"ts": 1793365839.4960244, "step": "check", "name": "devin-turn-complete", "ok": false, "detail": "kinds=[]"}
-{"ts": 1793365839.496049, "step": "devin-events", "count": 0, "kinds": [], "usage": []}
-{"ts": 1793365839.4971669, "step": "check", "name": "sse-stream", "ok": false, "detail": "HTTP Error 404: Not Found"}
-{"ts": 1793365839.4983137, "step": "check", "name": "devin-close-200", "ok": false, "detail": "got 404"}
-{"ts": 1793365839.4995475, "step": "check", "name": "devin-resume-201", "ok": false, "detail": "got 422 {'error': {'code': 'FAB-VALIDATION', 'message': 'session_ref required'}}"}
-{"ts": 1793365839.4995995, "step": "resume", "new_sid": null, "ref": ""}
-{"ts": 1793365839.501555, "step": "check", "name": "upload-needs-approval-409", "ok": true, "detail": "got 409"}
-{"ts": 1793365839.5016112, "step": "approval-minted", "approval_id": "ap_cf19d66cc29c8c8d", "resource": "file:e2e/test.txt", "action": "upload"}
-{"ts": 1793365839.5026002, "step": "check", "name": "approvals-listed", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.5040014, "step": "check", "name": "approval-denied", "ok": true, "detail": "got 200 {'resolved': True, 'granted': False, 'approval_id': 'ap_cf19d66cc29c8c8d'}"}
-{"ts": 1793365839.5051272, "step": "check", "name": "denied-still-409", "ok": true, "detail": "got 409"}
-{"ts": 1793365839.5062482, "step": "check", "name": "approval-granted-token", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.5079722, "step": "check", "name": "upload-approved-200", "ok": true, "detail": "got 200 {'path': 'e2e/test.txt', 'size': 11, 'saved': True}"}
-{"ts": 1793365839.5092928, "step": "check", "name": "replay-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
-{"ts": 1793365839.5106328, "step": "check", "name": "tamper-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
-{"ts": 1793365839.512546, "step": "check", "name": "context-attach-200", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.5142035, "step": "check", "name": "context-revoke-200", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.5153265, "step": "check", "name": "revoked-prompt-403", "ok": false, "detail": "got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}"}
-{"ts": 1793365839.516764, "step": "check", "name": "audit-events", "ok": false, "detail": "missing={'approval.consumed', 'approval.requested', 'session.create', 'approval.resolved'}"}
-{"ts": 1793365839.5186806, "step": "check", "name": "pf-health", "ok": true, "detail": "got 200"}
-{"ts": 1793365839.7300835, "step": "check", "name": "pf-products", "ok": true, "detail": "got 200 names={'Customer Analytics', 'Payments API'}"}
-{"ts": 1793365839.7321093, "step": "check", "name": "pf-knowledge-cited", "ok": false, "detail": "got 422"}
-{"ts": 1793365839.7321846, "step": "pf-citation", "chunk": null}
-{"ts": 1793365844.313369, "step": "check", "name": "portal-sessions-visible", "ok": false, "detail": "session titles not found in DOM"}
-{"ts": 1793365844.380779, "step": "check", "name": "portal-js-errors", "ok": true, "detail": ""}
-{"ts": 1793365844.746548, "step": "done", "failures": ["devin-session-201: got 502 {'error': {'code': 'FAB-QUOTA', 'message': 'local runner quota 8 reached'}}", "devin-prompt-200: got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}", "devin-streamed-answer: text='' kinds=[]", "devin-usage-event: kinds=[]", "devin-turn-complete: kinds=[]", "sse-stream: HTTP Error 404: Not Found", "devin-close-200: got 404", "devin-resume-201: got 422 {'error': {'code': 'FAB-VALIDATION', 'message': 'session_ref required'}}", "revoked-prompt-403: got 404 {'error': {'code': 'FAB-404', 'message': 'not found'}}", "audit-events: missing={'approval.consumed', 'approval.requested', 'session.create', 'approval.resolved'}", "pf-knowledge-cited: got 422", "portal-sessions-visible: session titles not found in DOM"]}
+{"ts": 1793368120.3943627, "step": "boot", "note": "starting PF API :8470 + bridge :8471 + portal static :4200"}
+{"ts": 1793368121.0351233, "step": "boot", "note": "all up", "pair_token_present": true}
+{"ts": 1793368121.0363731, "step": "check", "name": "status-no-auth-401", "ok": true, "detail": "got 401"}
+{"ts": 1793368121.037539, "step": "check", "name": "pair-bad-token-403", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'invalid pair token'}}"}
+{"ts": 1793368121.0382702, "step": "check", "name": "pair-exchange-201", "ok": true, "detail": "got 201"}
+{"ts": 1793368121.0383108, "step": "pair", "device": "dev_3488461d05ec", "scopes": ["agent"]}
+{"ts": 1793368121.040637, "step": "check", "name": "providers-list", "ok": true, "detail": "got 200"}
+{"ts": 1793368121.5030828, "step": "check", "name": "devin-session-201", "ok": true, "detail": "got 201 {'id': 'ses_g64bvzsivhnc', 'provider': 'devin', 'product_id': 'prd_017179b95798', 'workspace_id': 'ws_c70c04c22546', 'state': 'active', 'provider_session_ref': 'nine-split', 'title': '', 'created_at': '2026-10-30T13:48:41.500Z', 'resumable': True, 'meta': {'created_at': '2026-10-30T13:48:41.501Z', 'provider': 'devin', 'product_id': 'prd_017179b95798', 'workspace_id': 'ws_c70c04c22546', 'title': 'e2e-devin', 'updated_at': '2026-10-30T13:48:41.502Z', 'context_version': 1, 'policy_version': 'forge/PolicyBundle/1'}, 'context': {'schema': 'forge/ProductAgentSessionContext/v1', 'identity': 'e2e-chromium', 'workspace_id': 'ws_c70c04c22546', 'product_id': 'prd_017179b95798', 'provider': 'devin', 'agent_profile': 'default', 'allowed_knowledge_sources': ['api_errors.md'], 'allowed_datasets': [], 'allowed_metrics': [], 'allowed_apis': [], 'allowed_tools': [], 'mcp_registry': ['product-forge'], 'permissions': [], 'budget_usd': None, 'context_version': 1, 'policy_version': 'forge/PolicyBundle/1', 'expires_at': None, 'trust': 'active', 'context_policy': 'context_optional'}}"}
+{"ts": 1793368121.503163, "step": "session", "sid": "ses_g64bvzsivhnc", "acp_ref": "nine-split", "context_version": 1}
+{"ts": 1793368124.5584557, "step": "check", "name": "devin-prompt-200", "ok": true, "detail": "got 200 {'accepted': True, 'events_drained': 35}"}
+{"ts": 1793368124.5719998, "step": "check", "name": "devin-streamed-answer", "ok": true, "detail": "text='FORGE-E2E-PING-9' kinds=['runtime.unknown', 'runtime.unknown', 'usage.updated', 'turn.completed']"}
+{"ts": 1793368124.572074, "step": "check", "name": "devin-usage-event", "ok": true, "detail": "kinds=['session.created', 'turn.started', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.error', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.error', 'runtime.unknown', 'message.delta', 'runtime.unknown', 'message.delta', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'usage.updated', 'turn.completed']"}
+{"ts": 1793368124.5720935, "step": "check", "name": "devin-turn-complete", "ok": true, "detail": "kinds=['session.created', 'turn.started', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.error', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.error', 'runtime.unknown', 'message.delta', 'runtime.unknown', 'message.delta', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'runtime.unknown', 'usage.updated', 'turn.completed']"}
+{"ts": 1793368124.572108, "step": "devin-events", "count": 37, "kinds": ["runtime.unknown", "runtime.unknown", "runtime.unknown", "runtime.unknown", "usage.updated", "turn.completed"], "usage": [{"tokens_in": 136850, "tokens_out": 61, "total": 136911, "raw_usage": {"totalTokens": 136911, "inputTokens": 136850, "outputTokens": 61, "cachedReadTokens": 136832}}]}
+{"ts": 1793368124.5737023, "step": "check", "name": "sse-stream", "ok": true, "detail": "id: 196\nevent: session.created\ndata: {\"schema\":\"forge/AgentBridgeEvent/v1\",\"id\":\"evt_hbbxmf1b7aj5\",\"ts\":\"2026-10-30T13:4"}
+{"ts": 1793368124.6075675, "step": "check", "name": "devin-close-200", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.0499907, "step": "check", "name": "devin-resume-201", "ok": true, "detail": "got 201 {'id': 'ses_85pyhguy8i18', 'provider': 'devin', 'product_id': None, 'workspace_id': None, 'state': 'active', 'provider_session_ref': 'nine-split', 'title': '', 'created_at': '2026-10-30T13:48:45.048Z', 'resumable': True}"}
+{"ts": 1793368125.0500343, "step": "resume", "new_sid": "ses_85pyhguy8i18", "ref": "nine-split"}
+{"ts": 1793368125.0552948, "step": "check", "name": "upload-needs-approval-409", "ok": true, "detail": "got 409"}
+{"ts": 1793368125.0553746, "step": "approval-minted", "approval_id": "ap_3613798c31d8d866", "resource": "file:e2e/test.txt", "action": "upload"}
+{"ts": 1793368125.0562148, "step": "check", "name": "approvals-listed", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.0574517, "step": "check", "name": "approval-denied", "ok": true, "detail": "got 200 {'resolved': True, 'granted': False, 'approval_id': 'ap_3613798c31d8d866'}"}
+{"ts": 1793368125.0586898, "step": "check", "name": "denied-still-409", "ok": true, "detail": "got 409"}
+{"ts": 1793368125.0599115, "step": "check", "name": "approval-granted-token", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.0615854, "step": "check", "name": "upload-approved-200", "ok": true, "detail": "got 200 {'path': 'e2e/test.txt', 'size': 11, 'saved': True}"}
+{"ts": 1793368125.0627537, "step": "check", "name": "replay-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
+{"ts": 1793368125.0638044, "step": "check", "name": "tamper-blocked", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'approval token already consumed'}}"}
+{"ts": 1793368125.0659716, "step": "check", "name": "context-attach-200", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.0679395, "step": "check", "name": "context-revoke-200", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.0693727, "step": "check", "name": "revoked-prompt-403", "ok": true, "detail": "got 403 {'error': {'code': 'FAB-FORBIDDEN', 'message': 'session context revoked'}}"}
+{"ts": 1793368125.0704987, "step": "check", "name": "audit-events", "ok": true, "detail": "missing=set()"}
+{"ts": 1793368125.0731807, "step": "check", "name": "pf-health", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.2677221, "step": "check", "name": "pf-products", "ok": true, "detail": "got 200 names={'Payments API', 'Customer Analytics'}"}
+{"ts": 1793368125.272661, "step": "check", "name": "pf-knowledge-cited", "ok": true, "detail": "got 200"}
+{"ts": 1793368125.2727468, "step": "pf-citation", "chunk": "chk_3029de4fdc00"}
+{"ts": 1793368128.910458, "step": "check", "name": "portal-sessions-visible", "ok": true, "detail": "session titles not found in DOM"}
+{"ts": 1793368128.99664, "step": "check", "name": "portal-js-errors", "ok": true, "detail": ""}
+{"ts": 1793368129.2885697, "step": "done", "failures": []}

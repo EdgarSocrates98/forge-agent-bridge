@@ -28,6 +28,14 @@ MAX_BODY = 8 * 1024 * 1024          # 8 MiB request cap (§25.5)
 RATE_LIMIT = 240                    # req/min per credential (§25.5)
 NONCE_WINDOW_S = 60.0               # replay window for X-FAB-Nonce
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# §30.1 — full-origin allowlist: exact "scheme://host:port" entries may be
+# configured via FAB_ALLOWED_ORIGINS (comma-separated) or established by
+# pairing. Default policy additionally accepts http(s) loopback origins
+# (scheme http/https + loopback host); everything else is rejected.
+_ALLOWED_ORIGINS: set[str] = {
+    o.strip() for o in os.environ.get("FAB_ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+}
 
 
 def state_dir() -> Path:
@@ -204,7 +212,17 @@ def make_app() -> Any:
             origin = self.headers.get("Origin")
             if not origin:
                 return True  # non-browser client — no Origin to check
-            return urlparse(origin).hostname in _ALLOWED_HOSTS
+            if origin in _ALLOWED_ORIGINS:
+                return True
+            try:
+                p = urlparse(origin)
+            except ValueError:
+                return False          # malformed origin
+            if p.scheme not in {"http", "https"}:
+                return False          # non-web schemes rejected
+            if not p.hostname or p.hostname not in _ALLOWED_HOSTS:
+                return False          # external host / DNS rebinding guard
+            return p.port is None or 0 < p.port < 65536
 
         def _sse(self, orch: Any, sid: str, after_seq: int,
                  *, max_seconds: float = 55.0, heartbeat_s: float = 10.0
@@ -577,6 +595,14 @@ def make_app() -> Any:
                         pid = (ctx or {}).get("product_id") or ""
                         return self._send(200, {"items": intel.decision_records(
                             evs, sid, pid)})
+                    if sub == "integrity":
+                        from .integrity import check_session
+                        from .registry import REGISTRY
+                        return self._send(200, check_session(
+                            sid, events=evs, meta=meta.get(sid),
+                            pending_approvals=approvals.pending_for(sid),
+                            known_providers={
+                                d.name for d in REGISTRY.detect_all()}))
                 if self.command == "GET" and parts == ["intel", "finops"]:
                     return self._send(200, intel.finops_report(
                         budgets.summary()))
@@ -673,6 +699,14 @@ def make_app() -> Any:
                                session=d.session_id, review=d.review)
                     return self._send(201, {"recorded": True,
                                             "review": d.review})
+                if (self.command == "POST" and len(parts) == 2
+                        and parts[1] == "revoke"):
+                    sid = str((body or {}).get("session_id", ""))
+                    revoked = ctxs.revoke(sid)
+                    audit.emit("context.revoked", auth.get("actor", "local"),
+                               session=sid,
+                               context_version=revoked.get("context_version"))
+                    return self._send(200, {"revoked": True, "session_id": sid})
                 if (self.command == "GET" and len(parts) == 2
                         and parts[1] == "deltas"):
                     qs = parse_qs(urlparse(self.path).query)

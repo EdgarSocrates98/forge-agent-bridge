@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets as _secrets
+import threading
 import time
 from typing import Any
 
@@ -30,6 +31,7 @@ class ApprovalStore:
     def __init__(self) -> None:
         self._pending: dict[str, dict[str, Any]] = {}
         self._grants: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def request(self, *, session_id: str, actor: str, resource: str,
                 action: str, args: dict[str, Any], risk: str = "medium",
@@ -48,50 +50,60 @@ class ApprovalStore:
 
     def resolve(self, approval_id: str, *, approved: bool,
                 actor: str) -> dict[str, Any]:
-        ap = self._pending.get(approval_id)
-        if not ap:
-            raise BridgeError("FAB-NOT-FOUND", "unknown approval_id")
-        if time.time() > ap["expires_at"]:
-            del self._pending[approval_id]
-            raise BridgeError("FAB-VALIDATION", "approval request expired")
-        del self._pending[approval_id]
-        if not approved:
-            return {"resolved": True, "granted": False,
-                    "approval_id": approval_id}
-        token = _secrets.token_urlsafe(24)
-        self._grants[token] = {
-            "approval_id": approval_id, "session_id": ap["session_id"],
-            "actor": actor, "resource": ap["resource"],
-            "action": ap["action"], "args_digest": ap["args_digest"],
-            "scope": ap["scope"], "risk": ap["risk"],
-            "decided_at": time.time(),
-            "expires_at": time.time() + TTL_S, "consumed": False,
-        }
-        return {"resolved": True, "granted": True,
-                "approval_id": approval_id, "approval_token": token,
-                "expires_at": self._grants[token]["expires_at"]}
+        with self._lock:
+            ap = self._pending.pop(approval_id, None)
+            if not ap:
+                raise BridgeError("FAB-NOT-FOUND", "unknown approval_id")
+            if time.time() > ap["expires_at"]:
+                raise BridgeError("FAB-VALIDATION", "approval request expired")
+            if not approved:
+                return {"resolved": True, "granted": False,
+                        "approval_id": approval_id}
+            token = _secrets.token_urlsafe(24)
+            self._grants[token] = {
+                "approval_id": approval_id, "session_id": ap["session_id"],
+                "actor": actor, "requester": ap["actor"],
+                "resource": ap["resource"], "action": ap["action"],
+                "args_digest": ap["args_digest"], "scope": ap["scope"],
+                "risk": ap["risk"], "decided_at": time.time(),
+                "expires_at": time.time() + TTL_S, "consumed": False,
+            }
+            return {"resolved": True, "granted": True,
+                    "approval_id": approval_id, "approval_token": token,
+                    "expires_at": self._grants[token]["expires_at"]}
 
     def consume(self, token: str, *, session_id: str, resource: str,
-                action: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Verify + consume a grant: op must match digest exactly, once."""
-        g = self._grants.get(token)
-        if not g:
-            raise BridgeError("FAB-FORBIDDEN", "invalid approval token")
-        if g["consumed"]:
-            raise BridgeError("FAB-FORBIDDEN",
-                              "approval token already consumed")
-        if time.time() > g["expires_at"]:
-            raise BridgeError("FAB-FORBIDDEN", "approval token expired")
-        if g["session_id"] != session_id or g["resource"] != resource \
-                or g["action"] != action:
-            raise BridgeError("FAB-FORBIDDEN",
-                              "approval token does not cover this operation")
-        if g["args_digest"] != digest_args(args):
-            raise BridgeError("FAB-FORBIDDEN",
-                              "operation arguments differ from approved")
-        g["consumed"] = True
-        return {"consumed": True, "approval_id": g["approval_id"],
-                "actor": g["actor"]}
+                action: str, args: dict[str, Any],
+                actor: str | None = None) -> dict[str, Any]:
+        """Verify + consume a grant: op must match digest exactly, once.
+
+        Consumption is atomic under the store lock: two simultaneous
+        requests cannot both observe ``consumed == False``.
+        """
+        with self._lock:
+            g = self._grants.get(token)
+            if not g:
+                raise BridgeError("FAB-FORBIDDEN", "invalid approval token")
+            if g["consumed"]:
+                raise BridgeError("FAB-FORBIDDEN",
+                                  "approval token already consumed")
+            if time.time() > g["expires_at"]:
+                raise BridgeError("FAB-FORBIDDEN", "approval token expired")
+            if g["session_id"] != session_id or g["resource"] != resource \
+                    or g["action"] != action:
+                raise BridgeError("FAB-FORBIDDEN",
+                                  "approval token does not cover this operation")
+            if g["args_digest"] != digest_args(args):
+                raise BridgeError("FAB-FORBIDDEN",
+                                  "operation arguments differ from approved")
+            if actor is not None and g["requester"] and \
+                    actor != g["requester"]:
+                raise BridgeError(
+                    "FAB-FORBIDDEN",
+                    "approval was requested by a different actor")
+            g["consumed"] = True
+            return {"consumed": True, "approval_id": g["approval_id"],
+                    "actor": g["actor"]}
 
     def pending_for(self, session_id: str) -> list[dict[str, Any]]:
         return [dict(a) for a in self._pending.values()

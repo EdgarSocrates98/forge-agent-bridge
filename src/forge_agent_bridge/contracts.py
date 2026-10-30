@@ -107,4 +107,7 @@ EVENT_TYPES = {
     "plan.updated", "usage.updated",
     "runtime.error", "runtime.unknown", "connection.disconnected",
     "session.retention-trim",
+    "context.attach", "context.delta", "context.revoked",
+    "approval.consumed", "authorization.denied",
+    "pair.issued", "pair.revoked", "device.revoked",
 }

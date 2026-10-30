@@ -46,8 +46,19 @@ class ProductAgentSessionContext(BaseModel):
     context_version: int = 1
     policy_version: str = "forge/PolicyBundle/1"
     expires_at: float | None = None
+    trust: str = "active"                    # active|revoked
+    context_policy: str = "context_optional"  # context_optional|context_required
 
     model_config = {"populate_by_name": True}
+
+
+# Tools whose access must be explicitly granted: for these, an empty
+# allowlist means "nothing granted" (deny-by-default), never unrestricted.
+RESTRICTED_TOOLS = frozenset({
+    "files:write", "files:delete", "files:patch",
+    "process:spawn", "process:kill",
+    "mcp:invoke", "source:query", "network:egress",
+})
 
 
 class AgentContextDelta(BaseModel):
@@ -104,21 +115,54 @@ class ContextStore:
         d = self._data.get(session_id)
         return ProductAgentSessionContext.model_validate(d) if d else None
 
+    def revoke(self, session_id: str) -> dict[str, Any]:
+        """§30.1 — revoke a bound context: blocks all dependent ops."""
+        d = self._data.get(session_id)
+        if not d:
+            raise BridgeError("FAB-NOT-FOUND", "no context bound to session")
+        d["trust"] = "revoked"
+        self._ctx.write_text(json.dumps(self._data, indent=1))
+        return dict(d)
+
     def assert_allowed(self, session_id: str, *, tool: str | None = None,
                        source: str | None = None,
-                       dataset: str | None = None) -> None:
-        """§27.6 — tool authorization against the bound context."""
+                       dataset: str | None = None,
+                       require_context: bool = False) -> None:
+        """§30.1 — explicit authorization semantics.
+
+        - unbound session: allowed only when ``require_context`` is False
+          (generic local session, broker-scoped perms still apply).
+        - revoked context: deny everything immediately.
+        - expired context: deny everything.
+        - restricted tools (``RESTRICTED_TOOLS``): deny unless explicitly
+          listed in ``allowed_tools`` — an empty allowlist never means
+          unrestricted for restricted kinds.
+        - unrestricted tools/sources/datasets: empty allowlist means
+          unconstrained (documented local-session semantics).
+        """
         ctx = self.context_of(session_id)
         if ctx is None:
-            return                       # unbound session: broker decides
+            if require_context:
+                raise BridgeError(
+                    "FAB-FORBIDDEN",
+                    "operation requires a bound product context")
+            return                       # generic session: broker decides
+        if ctx.trust == "revoked":
+            raise BridgeError("FAB-FORBIDDEN", "session context revoked")
         if ctx.expires_at and time.time() > ctx.expires_at:
             raise BridgeError("FAB-FORBIDDEN", "session context expired")
+
         def _deny(what: str, val: str, allowed: list[str]) -> None:
             if allowed and val not in allowed:
                 raise BridgeError(
                     "FAB-FORBIDDEN",
                     f"{what} '{val}' not in session context allowlist")
+
         if tool:
+            if tool in RESTRICTED_TOOLS and tool not in ctx.allowed_tools:
+                raise BridgeError(
+                    "FAB-FORBIDDEN",
+                    f"restricted tool '{tool}' requires an explicit grant")
             _deny("tool", tool, ctx.allowed_tools)
         if source:
             _deny("knowledge source", source, ctx.allowed_knowledge_sources)

@@ -28,10 +28,13 @@ class BridgeOrchestrator:
         self._push(s.id, {"type": "session/new", "params": {"session_id": s.id}})
         return s
 
-    def prompt(self, session_id: str, text: str) -> None:
+    def prompt(self, session_id: str, text: str,
+               attachments: list[dict[str, Any]] | None = None) -> None:
         self._require(session_id)
-        self._push(session_id, {"type": "prompt", "params": {"text": text}})
-        self.adapter.send_prompt(session_id, text)
+        self._push(session_id, {"type": "prompt", "params": {
+            "text": text,
+            "attachments": len(attachments or [])}})
+        self.adapter.send_prompt(session_id, text, attachments=attachments)
 
     def drain(self, session_id: str) -> int:
         """Pull native events → normalize → buffer. Returns count stored."""
@@ -45,6 +48,24 @@ class BridgeOrchestrator:
     def replay(self, session_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
         self._require(session_id)
         return self.buffers[session_id].replay(after_seq)
+
+    def list_sessions(self) -> list[AgentSession]:
+        return self.adapter.list_sessions()
+
+    def resume(self, session_ref: str) -> AgentSession:
+        s = self.adapter.resume_session(session_ref)
+        self.sessions[s.id] = s
+        self.buffers[s.id] = EventBuffer(s.id)
+        self._push(s.id, {"type": "session/resume",
+                          "params": {"session_id": s.id, "ref": session_ref}})
+        return s
+
+    def approve(self, session_id: str, approval_id: str, approved: bool) -> None:
+        self._require(session_id)
+        self.adapter.respond_to_approval(approval_id, approved)
+        self._push(session_id, {"type": "permission_response",
+                                "params": {"approval_id": approval_id,
+                                           "approved": approved}})
 
     def cancel(self, session_id: str) -> None:
         self.adapter.cancel(session_id)

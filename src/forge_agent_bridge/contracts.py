@@ -103,5 +103,5 @@ EVENT_TYPES = {
     "approval.requested", "approval.resolved",
     "artifact.created", "artifact.updated",
     "plan.updated", "usage.updated",
-    "runtime.error", "connection.disconnected",
+    "runtime.error", "runtime.unknown", "connection.disconnected",
 }

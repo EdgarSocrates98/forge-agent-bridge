@@ -86,6 +86,12 @@ class AcpClient:
                             "params": params or {}}).encode() + b"\n")
             self.proc.stdin.flush()
 
+    def drain_notifications(self) -> list[dict[str, Any]]:
+        """Non-blocking: pop all queued notifications (turn already done)."""
+        with self._lock:
+            out, self._notifications = self._notifications, []
+        return out
+
     def notifications(self) -> Iterator[dict[str, Any]]:
         while True:
             if self._notifications:

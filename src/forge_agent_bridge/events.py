@@ -79,14 +79,17 @@ NATIVE_MAP: dict[str, str] = {
     "session/resume": "session.resumed",
     "session/close": "session.closed",
     "prompt": "turn.started",
+    "turn_start": "turn.started",
     "content_delta": "message.delta",
     "content": "message.completed",
     "tool_call": "tool.started",
     "tool_result": "tool.completed",
+    "plan_update": "plan.updated",
     "request_permission": "approval.requested",
     "permission_response": "approval.resolved",
     "usage": "usage.updated",
     "error": "runtime.error",
+    "unknown": "runtime.unknown",
 }
 
 

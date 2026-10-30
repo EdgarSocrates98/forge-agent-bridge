@@ -86,13 +86,18 @@ def make_app() -> Any:
 
     token = pair_token()
     supervisor = ProcessSupervisor()
-    orchs: dict[str, Any] = {}  # session_id → orchestrator
+    orchs: dict[str, Any] = {}  # provider → orchestrator
+    from .metadata import SessionMetaStore
+    meta = SessionMetaStore()
 
     def _orch(provider: str) -> Any:
         from .orchestrator import build_orchestrator
         if provider not in orchs:
             orchs[provider] = build_orchestrator(provider)
         return orchs[provider]
+
+    def _session_provider(sid: str, fallback: str = "fake") -> str:
+        return str(meta.get(sid).get("provider") or fallback)
 
     class H(BaseHTTPRequestHandler):
         def _auth_ok(self) -> bool:
@@ -137,18 +142,57 @@ def make_app() -> Any:
                 supervisor.spawn(sid, cmd, cwd=body.get("cwd", "."))
                 return self._send(201, {"session_id": sid})
             if self.command == "POST" and parts == ["agent-sessions"]:
+                provider = str(body.get("provider", "fake"))
                 try:
-                    s = _orch(body.get("provider", "fake")).create_session(
+                    s = _orch(provider).create_session(
                         product_id=body.get("product_id"),
                         workspace_id=body.get("workspace_id"))
-                    return self._send(201, s.model_dump(mode="json"))
+                    meta.upsert(s.id, provider=provider,
+                                product_id=s.product_id,
+                                workspace_id=s.workspace_id,
+                                title=body.get("title") or "")
+                    out = s.model_dump(mode="json")
+                    out["meta"] = meta.get(s.id)
+                    return self._send(201, out)
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
                     return self._send(502, {"error": {"code": code,
                                                     "message": str(e)}})
+            if self.command == "GET" and parts == ["agent-sessions"]:
+                store = meta.list(include_archived=True)
+                live: dict[str, Any] = {}
+                for o in orchs.values():
+                    for s in o.list_sessions():
+                        d = s.model_dump(mode="json")
+                        d["meta"] = store.get(s.id, {})
+                        live[s.id] = d
+                for sid, m in store.items():
+                    if sid not in live:
+                        live[sid] = {"id": sid, "state": "closed",
+                                     "provider": m.get("provider"),
+                                     "meta": m}
+                return self._send(200, {"items": list(live.values())})
+            if len(parts) == 2 and parts[0] == "agent-sessions":
+                sid = parts[1]
+                if self.command == "PATCH":
+                    allowed = {k: v for k, v in body.items() if k in
+                               {"title", "product_id", "workspace_id",
+                                "favorite", "archived", "visibility", "notes"}}
+                    return self._send(200, {"meta": meta.upsert(sid, **allowed)})
+                if self.command == "DELETE":
+                    provider = _session_provider(sid)
+                    closed = False
+                    if provider in orchs:
+                        try:
+                            orchs[provider].close(sid)
+                            closed = True
+                        except Exception as e:  # noqa: BLE001
+                            self.log_message("close failed: %s", e)
+                    meta.upsert(sid, archived=True)
+                    return self._send(200, {"closed": closed, "archived": True})
             if len(parts) == 3 and parts[0] == "agent-sessions":
                 sid, action = parts[1], parts[2]
-                provider = body.get("provider", "fake")
+                provider = body.get("provider") or _session_provider(sid)
                 try:
                     o = _orch(provider)
                     if action == "prompt" and self.command == "POST":
@@ -156,7 +200,8 @@ def make_app() -> Any:
                         if not text:
                             return self._send(422, {"error": {"code": "FAB-VALIDATION",
                                                             "message": "text required"}})
-                        o.prompt(sid, text)
+                        o.prompt(sid, text,
+                                 attachments=body.get("attachments"))
                         o.drain(sid)
                         return self._send(200, {"accepted": True})
                     if action == "events" and self.command == "POST":
@@ -165,6 +210,18 @@ def make_app() -> Any:
                     if action == "cancel" and self.command == "POST":
                         o.cancel(sid)
                         return self._send(200, {"cancelled": True})
+                    if action == "resume" and self.command == "POST":
+                        ref = str(body.get("session_ref") or "")
+                        if not ref:
+                            return self._send(422, {"error": {"code": "FAB-VALIDATION",
+                                                            "message": "session_ref required"}})
+                        s = o.resume(ref)
+                        meta.upsert(s.id, provider=provider)
+                        return self._send(201, s.model_dump(mode="json"))
+                    if action == "approve" and self.command == "POST":
+                        o.approve(sid, str(body.get("approval_id", "")),
+                                  bool(body.get("approved")))
+                        return self._send(200, {"resolved": True})
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
                     return self._send(502, {"error": {"code": code,
@@ -177,6 +234,7 @@ def make_app() -> Any:
 
         do_GET = _route
         do_POST = _route
+        do_PATCH = _route
         do_DELETE = _route
 
         def log_message(self, *a: Any) -> None:  # quiet — logs via file

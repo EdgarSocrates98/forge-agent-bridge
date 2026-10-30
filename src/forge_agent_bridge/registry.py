@@ -65,7 +65,37 @@ class ProviderRegistry:
         self._adapters[provider_id] = adapter
 
     def adapter(self, provider_id: str) -> ProviderAdapter | None:
-        return self._adapters.get(provider_id)
+        """Explicit registration wins; otherwise lazily resolve a real
+        adapter for the provider kind. Missing binary → None (caller
+        raises FAB-UNAVAILABLE)."""
+        if provider_id in self._adapters:
+            return self._adapters[provider_id]
+        adapter = self._resolve(provider_id)
+        if adapter:
+            self._adapters[provider_id] = adapter
+        return adapter
+
+    @staticmethod
+    def _resolve(provider_id: str) -> ProviderAdapter | None:
+        meta = CATALOG.get(provider_id)
+        if not meta:
+            return None
+        exe = meta.get("executable")
+        if exe and not shutil.which(exe):
+            return None
+        if provider_id == "devin":
+            from .providers.acp_adapter import devin_adapter
+            return devin_adapter()
+        if provider_id == "claude-code":
+            from .providers.claude import claude_adapter
+            return claude_adapter()
+        if provider_id == "codex":
+            from .providers.codex import codex_adapter
+            return codex_adapter()
+        if provider_id == "fake":
+            from .providers.fake import FakeAdapter
+            return FakeAdapter()
+        return None
 
     def detect_all(self) -> list[ProviderDescriptor]:
         """Installed-CLI detection via PATH — honest `unverified` auth."""

@@ -19,6 +19,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from .adapter import BridgeError
 
@@ -156,8 +157,45 @@ def make_app() -> Any:
             origin = self.headers.get("Origin")
             if not origin:
                 return True  # non-browser client — no Origin to check
-            from urllib.parse import urlparse
             return urlparse(origin).hostname in _ALLOWED_HOSTS
+
+        def _sse(self, orch: Any, sid: str, after_seq: int,
+                 *, max_seconds: float = 55.0, heartbeat_s: float = 10.0
+                 ) -> None:
+            """Server-Sent Events stream (§26.6).
+
+            Ordered, deduplicated by seq, resumable via Last-Event-ID or
+            ?after_seq=, heartbeat comments keep proxies alive, bounded
+            duration so clients reconnect with their cursor (gap-free).
+            """
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            last = after_seq
+            start = time.monotonic()
+            last_beat = start
+            try:
+                while time.monotonic() - start < max_seconds:
+                    for ev in orch.replay(sid, last):
+                        seq = int(ev.get("seq", 0))
+                        if seq <= last:
+                            continue          # dedup
+                        last = seq
+                        data = json.dumps(ev, separators=(",", ":"))
+                        self.wfile.write(
+                            f"id: {seq}\nevent: {ev['type']}\n"
+                            f"data: {data}\n\n".encode())
+                    now = time.monotonic()
+                    if now - last_beat >= heartbeat_s:
+                        self.wfile.write(b": hb\n\n")
+                        last_beat = now
+                    self.wfile.flush()
+                    time.sleep(0.25)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # client disconnected — cursor resumes cleanly
 
         def _send(self, code: int, body: dict[str, Any]) -> None:
             data = json.dumps(body).encode()
@@ -248,7 +286,7 @@ def make_app() -> Any:
             if not self._origin_ok():
                 return self._send(403, {"error": {
                     "code": "FAB-FORBIDDEN", "message": "origin rejected"}})
-            parts = [p for p in self.path.split("/") if p]
+            parts = [p for p in urlparse(self.path).path.split("/") if p]
             # -- unauthenticated pairing exchange (localhost only) ---------
             if parts == ["pair", "exchange"] and self.command == "POST":
                 try:
@@ -588,6 +626,16 @@ def make_app() -> Any:
                     if action == "events" and self.command == "POST":
                         after = int(body.get("after_seq", 0))
                         return self._send(200, {"items": o.replay(sid, after)})
+                    if action == "stream" and self.command == "GET":
+                        # §26.6 — SSE: ordered, deduped by seq, cursor via
+                        # Last-Event-ID or ?after_seq=, heartbeats, reconnect
+                        collab.assert_can_read(sid, principal)
+                        qs = parse_qs(urlparse(self.path).query)
+                        after = int(qs.get("after_seq", [0])[0] or 0)
+                        last_id = self.headers.get("Last-Event-ID")
+                        if last_id:
+                            after = int(last_id)
+                        return self._sse(o, sid, after)
                     if action == "cancel" and self.command == "POST":
                         o.cancel(sid)
                         return self._send(200, {"cancelled": True})

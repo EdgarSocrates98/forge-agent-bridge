@@ -27,6 +27,7 @@ class CapabilityState(StrEnum):
     REQUIRES_CONFIG = "requires-configuration"
     REQUIRES_AUTH = "requires-authentication"
     UNVERIFIED = "unverified"
+    ERROR = "error"
 
 
 class AuthState(StrEnum):
@@ -58,6 +59,7 @@ class ProviderDescriptor(BaseModel):
     version: str | None = None
     capabilities: list[ProviderCapability] = Field(default_factory=list)
     auth_state: AuthState = AuthState.UNVERIFIED
+    matrix_version: str = "forge/ProviderCapabilityMatrix/1"
 
 
 class AgentSession(BaseModel):

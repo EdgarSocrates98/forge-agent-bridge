@@ -68,9 +68,13 @@ def test_unmapped_native_event_preserved():
 
 
 def test_capability_matrix_states():
-    from forge_agent_bridge.registry import REGISTRY
-    states = {c.state.value for d in REGISTRY.detect_all() for c in d.capabilities}
-    assert "unverified" in states and "requires-configuration" in states
+    from forge_agent_bridge.registry import CAPABILITY_VOCAB, REGISTRY
+    ds = REGISTRY.detect_all()
+    states = {c.state.value for d in ds for c in d.capabilities}
+    assert "unverified" in states and "supported" in states
+    for d in ds:  # full versioned vocabulary on every provider (§26.1)
+        assert {c.name for c in d.capabilities} == set(CAPABILITY_VOCAB)
+        assert d.matrix_version == "forge/ProviderCapabilityMatrix/1"
 
 
 def test_acp_client_fake_server():

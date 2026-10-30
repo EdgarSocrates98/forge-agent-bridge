@@ -112,6 +112,18 @@ class CollabStore:
             "FAB-FORBIDDEN",
             f"principal '{principal}' has no write grant on {sid}")
 
+    def assert_can_read(self, sid: str, principal: str) -> None:
+        """Read grant: owner, observers, and delegated operator may read;
+        everyone else is denied (private or shared)."""
+        rec = self.rec(sid)
+        if principal in (rec["owner"], rec["delegated_to"]):
+            return
+        if principal in rec["observers"]:
+            return
+        raise BridgeError(
+            "FAB-FORBIDDEN",
+            f"principal '{principal}' has no read grant on {sid}")
+
     def assert_can_approve(self, sid: str, principal: str) -> None:
         rec = self.rec(sid)
         if principal in (rec["owner"], rec["delegated_to"]):

@@ -10,6 +10,7 @@ states, never bypassed.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -74,12 +75,29 @@ class CodexAdapter:
     EXE = "codex"
     SPAWN_ARGV: ClassVar[list[str]] = ["codex"]
 
-    def __init__(self, sandbox: str = "read-only") -> None:
+    def __init__(self, sandbox: str = "read-only",
+                 workdir: str | None = None) -> None:
         self.sandbox = sandbox
+        # codex exec refuses to run outside a "trusted directory" (git
+        # repo) unless --skip-git-repo-check is passed — we never pass
+        # it; instead turns run inside a real per-provider workdir that
+        # is git-initialized once.
+        self.workdir = workdir or os.environ.get("FAB_PROVIDER_WORKDIR")
         self._sessions: dict[str, AgentSession] = {}
         self._threads: dict[str, str] = {}          # session → codex thread_id
         self._turn_events: dict[str, list[dict[str, Any]]] = {}
         self._procs: dict[str, subprocess.Popen[bytes]] = {}
+
+    def _cwd(self) -> str | None:
+        if not self.workdir:
+            return None
+        from pathlib import Path
+        wd = Path(self.workdir) / "codex"
+        wd.mkdir(parents=True, exist_ok=True)
+        if not (wd / ".git").exists():
+            subprocess.run(["git", "init", "-q"], cwd=wd, check=False,
+                           capture_output=True)
+        return str(wd)
 
     def detect(self):
         from ..registry import REGISTRY
@@ -148,7 +166,7 @@ class CodexAdapter:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=False,
-                start_new_session=True)
+                cwd=self._cwd(), start_new_session=True)
         except FileNotFoundError as exc:
             raise ProviderUnavailableError("codex not on PATH",
                                            provider="codex") from exc

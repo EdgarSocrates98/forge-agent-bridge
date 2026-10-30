@@ -1,0 +1,33 @@
+{
+ "session": {
+  "id": "ses_6j64flwnbpqx",
+  "provider": "codex",
+  "product_id": null,
+  "workspace_id": null,
+  "state": "active",
+  "provider_session_ref": "01a18d3b-d6e1-7d61-9a2d-b82f56af3745",
+  "title": "",
+  "created_at": "2026-10-30T14:34:31.421Z",
+  "resumable": true,
+  "meta": {
+   "created_at": "2026-10-30T14:34:31.422Z",
+   "provider": "codex",
+   "product_id": null,
+   "workspace_id": null,
+   "title": "codex-live-probe",
+   "updated_at": "2026-10-30T14:34:31.422Z",
+   "context_version": 1,
+   "policy_version": "forge/PolicyBundle/1"
+  }
+ },
+ "event_kinds": [
+  "session.created",
+  "turn.started",
+  "session.created",
+  "turn.started",
+  "runtime.unknown",
+  "message.completed",
+  "usage.updated"
+ ],
+ "text": "Reply with exactly: FORGE-CODEX-BRIDGE-7FORGE-CODEX-BRIDGE-7"
+}

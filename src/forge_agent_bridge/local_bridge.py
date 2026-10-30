@@ -40,6 +40,11 @@ _ALLOWED_ORIGINS: set[str] = {
 
 def state_dir() -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # providers that demand a trusted cwd (e.g. codex exec) run their
+    # turns inside state_dir/provider-work/<provider> — see CodexAdapter.
+    import os
+    os.environ.setdefault("FAB_PROVIDER_WORKDIR",
+                          str(STATE_DIR / "provider-work"))
     return STATE_DIR
 
 
@@ -903,6 +908,11 @@ def make_app() -> Any:
                                                             "message": "session_ref required"}})
                         s = o.resume(ref)
                         meta.upsert(s.id, provider=provider)
+                        # resumed sessions are bound to the requesting
+                        # principal — without this share the session is
+                        # invisible/unusable to its own creator
+                        collab.share(s.id, owner=principal,
+                                     visibility="private")
                         return self._send(201, s.model_dump(mode="json"))
                     if action == "approve" and self.command == "POST":
                         collab.assert_can_approve(sid, principal)
@@ -1001,6 +1011,8 @@ def make_app() -> Any:
                         "message": "provider reports no resumable ref"}})
                 ns = o.resume(ref)
                 meta.upsert(ns.id, provider=provider)
+                collab.share(ns.id, owner=principal,
+                             visibility="private")
                 return self._send(201, {"handoff": "provider-resume",
                                         "session": ns.model_dump(mode="json")})
             # context-rebuild: honest reconstruction — new session seeded

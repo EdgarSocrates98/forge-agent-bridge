@@ -44,12 +44,67 @@ and [docs/HOMOLOGATION.md](docs/HOMOLOGATION.md) for release evidence.
 
 ## Install
 
+Two routes — same contract as `productforge install` / `sparkforge-aws install`:
+
+### Bootstrap scripts (user install, no checkout dependence)
+
+| File | Route |
+|---|---|
+| `install.sh` | POSIX (Linux/macOS) |
+| `install.windows.sh` | Windows Git Bash |
+| `install.ps1` | Windows PowerShell |
+| `scripts/forge_bootstrap.py` | shared engine, driven by `forge.json` |
+
 ```bash
-python3 -m pip install -e ".[dev]"   # dev env
+./install.sh            # or: install.ps1 / install.windows.sh
+./install.sh --dry-run  # plan only
+./install.sh --editable # dev mode — CLI tied to this checkout
+```
+
+The bootstrap detects Python → builds a wheel → creates a venv at
+`~/.forge/installs/forge-agent-bridge` → writes the `forge-bridge` launcher
+(`~/.local/bin` / `%USERPROFILE%\.local\bin`) → runs a `forge-bridge --version`
+smoke → registers the install under `~/.forge/installations/`.
+
+### `forge-bridge install` (guided wizard / flag path)
+
+Bare on a terminal, `forge-bridge install` runs the guided wizard:
+**scope** (`user`·`project`·`workspace`) → **profile**
+(`minimal`·`recommended`·`full`) → **components**
+(`service`·`state`·`pairing`·`providers`·`config`) → real dry-run plan →
+confirm → apply → doctor.
+
+Non-interactive for CI:
+
+```bash
+forge-bridge install --yes --scope user --profile recommended
+forge-bridge install --dry-run                    # plan JSON, nothing written
+forge-bridge install-status                     # per-check verification
+forge-bridge uninstall --yes                    # removes generated artifacts —
+                                                # NEVER pair.token/events/backups
+```
+
+Bridge-honest components (a localhost service ships no host payloads):
+
+| Component | Effect |
+|---|---|
+| `service` | verifies `forge-bridge` on PATH (`unverified` until bootstrap ran) |
+| `state` | `<root>` + `events/` + `backups/` dirs |
+| `pairing` | `<root>/pair.token` 0600 (never rotated silently) |
+| `providers` | `<root>/providers.json` — capability-matrix snapshot |
+| `config` | `<root>/config.json` — seeded limits (rate/quota/retention) |
+
+Default state root by scope: `user` → `~/.forge-bridge`,
+`project` → `./.forge-bridge`, `workspace` → `<parent>/.forge-bridge`.
+
+### Dev
+
+```bash
+python3 -m pip install -e ".[dev]"
 forge-bridge --help
 ```
 
-No dependencies beyond Python 3.11+ (`typer` for the CLI).
+No dependencies beyond Python 3.11+ (`typer`, `pydantic`).
 
 ## Quickstart
 

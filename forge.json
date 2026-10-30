@@ -1,0 +1,17 @@
+{
+  "forge_id": "forge-agent-bridge",
+  "package": "forge_agent_bridge",
+  "distribution": "forge-agent-bridge",
+  "cli": "forge-bridge",
+  "python": ">=3.11",
+  "version": "0.1.0",
+  "install_command": [
+    "forge-bridge",
+    "install",
+    "--yes"
+  ],
+  "smoke_command": [
+    "forge-bridge",
+    "doctor"
+  ]
+}

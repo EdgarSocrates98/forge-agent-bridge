@@ -15,8 +15,13 @@ def test_runners_lifecycle(srv):
     st, items = _req(port, tok, "GET", "/runners")
     assert st == 200 and any(r["id"] == "local" for r in items["items"])
     st, r = _req(port, tok, "POST", "/runners",
-                 {"id": "r1", "kind": "remote", "endpoint": "http://x:9"})
+                 {"id": "r1", "kind": "remote"})
     assert st == 201 and r["state"] == "unverified"  # honest — never probed
+    # SSRF: unresolvable/blocked endpoints are rejected at registration
+    st, _e = _req(port, tok, "POST", "/runners",
+                  {"id": "rbad", "kind": "remote",
+                   "endpoint": "http://169.254.169.254/"})
+    assert st == 422
     st, h = _req(port, tok, "POST", "/runners/r1/health")
     assert h["state"] in ("unverified", "ready")    # real reachability probe
     # remote placement refused without verified health

@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from ..adapter import (
     ProviderUnavailableError,
@@ -65,6 +65,7 @@ class ClaudeAdapter:
     --input-format stream-json` — real streaming session, per-session proc."""
 
     EXE = "claude"
+    SPAWN_ARGV: ClassVar[list[str]] = ["claude"]
 
     def __init__(self) -> None:
         self._procs: dict[str, subprocess.Popen[bytes]] = {}

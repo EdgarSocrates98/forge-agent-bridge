@@ -13,7 +13,7 @@ import json
 import shutil
 import subprocess
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from ..adapter import (
     ProviderUnavailableError,
@@ -72,6 +72,7 @@ class CodexAdapter:
     with real resume via `codex exec resume <thread_id>`."""
 
     EXE = "codex"
+    SPAWN_ARGV: ClassVar[list[str]] = ["codex"]
 
     def __init__(self, sandbox: str = "read-only") -> None:
         self.sandbox = sandbox

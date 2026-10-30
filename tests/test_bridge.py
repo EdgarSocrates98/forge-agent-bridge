@@ -135,9 +135,10 @@ def test_local_bridge_auth_and_supervisor(tmp_path, monkeypatch):
         # auth → 200
         c.request("GET", "/status", headers={"Authorization": f"Bearer {tok}"})
         assert c.getresponse().status == 200
-        # spawn supervised process, then terminate
+        # spawn supervised provider process (typed op — no arbitrary argv),
+        # then terminate
         c.request("POST", "/sessions",
-                  body='{"cmd": ["sleep", "30"]}',
+                  body='{"op": "spawn-provider", "provider": "fake"}',
                   headers={"Authorization": f"Bearer {tok}",
                            "Content-Type": "application/json"})
         resp = json.loads(c.getresponse().read())

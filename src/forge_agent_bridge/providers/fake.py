@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from ..contracts import AgentSession, AuthState, ProviderDescriptor, SessionState, new_id
 
 
 class FakeAdapter:
+    # test stub: the fake provider has no binary; its
+    # supervised process is a harmless sleeper (POSIX test surface)
+    SPAWN_ARGV: ClassVar[list[str]] = ["sleep", "3600"]
     def __init__(self) -> None:
         self.sessions: dict[str, AgentSession] = {}
         self.prompts: dict[str, list[str]] = {}

@@ -66,11 +66,38 @@ def test_file_endpoints_http(tmp_path, monkeypatch):
         assert any(i["name"] == "a.txt" for i in items)
         c.request("POST", "/files/preview", body='{"path":"a.txt"}', headers=hdr)
         assert json.loads(c.getresponse().read())["preview"] == "alpha"
+        # upload without approval → 409 + approval_request (§25.4)
+        up_body = json.dumps({"path": "b.txt",
+                              "content_b64":
+                                  base64.b64encode(b"beta").decode()})
+        c.request("POST", "/files/upload", body=up_body, headers=hdr)
+        r = c.getresponse()
+        resp = json.loads(r.read())
+        assert r.status == 409
+        req = resp["approval_request"]
+        # resolve the pending approval → one-time bound token
+        c.request("POST", f"/approvals/{req['approval_id']}/resolve",
+                  body='{"approved": true}', headers=hdr)
+        grant = json.loads(c.getresponse().read())
+        assert grant["granted"] is True
+        # retry with the bound approval token → saved
         c.request("POST", "/files/upload",
                   body=json.dumps({"path": "b.txt",
-                                   "content_b64": base64.b64encode(b"beta").decode(),
-                                   "approved": True}), headers=hdr)
+                                   "content_b64":
+                                       base64.b64encode(b"beta").decode(),
+                                   "approval_token":
+                                       grant["approval_token"]}),
+                  headers=hdr)
         assert json.loads(c.getresponse().read())["saved"] is True
+        # token is single-use — replay refused
+        c.request("POST", "/files/upload",
+                  body=json.dumps({"path": "b.txt",
+                                   "content_b64":
+                                       base64.b64encode(b"beta").decode(),
+                                   "approval_token":
+                                       grant["approval_token"]}),
+                  headers=hdr)
+        assert c.getresponse().status == 403
         c.request("POST", "/files/download", body='{"path":"b.txt"}', headers=hdr)
         b64 = json.loads(c.getresponse().read())["content_b64"]
         assert base64.b64decode(b64) == b"beta"

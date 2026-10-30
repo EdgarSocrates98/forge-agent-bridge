@@ -15,12 +15,18 @@ import secrets
 import signal
 import subprocess
 import threading
+import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from .adapter import BridgeError
 
 STATE_DIR = Path.home() / ".forge-bridge"
+MAX_BODY = 8 * 1024 * 1024          # 8 MiB request cap (§25.5)
+RATE_LIMIT = 240                    # req/min per credential (§25.5)
+NONCE_WINDOW_S = 60.0               # replay window for X-FAB-Nonce
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def state_dir() -> Path:
@@ -89,10 +95,13 @@ def make_app() -> Any:
     token = pair_token()
     supervisor = ProcessSupervisor()
     orchs: dict[str, Any] = {}  # provider → orchestrator
+    from .approvals import ApprovalStore
+    from .broker import Broker
     from .budgets import BudgetLedger
     from .collab import AuditLog, CollabStore
     from .files import FileService
     from .metadata import SessionMetaStore
+    from .pairing import Pairing
     from .runners import RunnerRegistry
     meta = SessionMetaStore()
     files = FileService(Path.cwd())  # workspace root = bridge launch dir
@@ -100,8 +109,19 @@ def make_app() -> Any:
     budgets = BudgetLedger()
     collab = CollabStore()
     audit = AuditLog()
+    pairing = Pairing(token)
+    approvals = ApprovalStore()
+    broker = Broker()
+    rl_window: dict[str, deque[float]] = {}
+    seen_nonces: dict[str, float] = {}
 
-    def _principal(headers: Any, sid: str) -> str:
+    def _principal(auth: dict[str, Any], sid: str,
+                   headers: Any) -> str:
+        """Identity comes from the *authenticated* credential — never the
+        self-declared header alone. Master token (local admin) may assert a
+        principal for dev; session tokens act as their device name."""
+        if auth.get("kind") == "session":
+            return str(auth.get("actor"))
         return collab.principal(sid, headers.get("X-FAB-Principal"))
 
     def _scope_map(sid: str, provider: str, principal: str) -> dict[str, str]:
@@ -120,19 +140,44 @@ def make_app() -> Any:
         return str(meta.get(sid).get("provider") or fallback)
 
     class H(BaseHTTPRequestHandler):
-        def _auth_ok(self) -> bool:
-            return self.headers.get("Authorization") == f"Bearer {token}"
+        timeout = 30  # socket read timeout (§25.5 request timeout)
+
+        def _auth(self) -> dict[str, Any] | None:
+            """Master pair token OR a paired session token (hashed compare)."""
+            h = self.headers.get("Authorization", "")
+            if not h.startswith("Bearer "):
+                return None
+            try:
+                return pairing.authenticate(h[7:].strip())
+            except BridgeError:
+                return None
+
+        def _origin_ok(self) -> bool:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True  # non-browser client — no Origin to check
+            from urllib.parse import urlparse
+            return urlparse(origin).hostname in _ALLOWED_HOSTS
 
         def _send(self, code: int, body: dict[str, Any]) -> None:
             data = json.dumps(body).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            origin = self.headers.get("Origin")
+            if origin and self._origin_ok():
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
             self.end_headers()
             self.wfile.write(data)
 
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_BODY:
+                raise BridgeError("FAB-TOO-LARGE",
+                                  f"body exceeds {MAX_BODY} bytes")
             raw = self.rfile.read(n) or b"{}"
             try:
                 data = json.loads(raw)
@@ -142,17 +187,93 @@ def make_app() -> Any:
                 raise BridgeError("FAB-VALIDATION", "JSON body must be an object")
             return data
 
+        def do_OPTIONS(self) -> None:  # CORS preflight (§25.5)
+            if not self._origin_ok():
+                return self._send(403, {"error": {
+                    "code": "FAB-FORBIDDEN", "message": "origin rejected"}})
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin",
+                             self.headers.get("Origin", ""))
+            self.send_header("Access-Control-Allow-Methods",
+                             "GET, POST, PATCH, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers",
+                             "Authorization, Content-Type, "
+                             "X-FAB-Principal, X-FAB-Nonce")
+            self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
+            self.end_headers()
+
+        def _host_ok(self) -> bool:
+            """DNS-rebinding guard: Host must be loopback (§25.5)."""
+            host = (self.headers.get("Host") or "").split(":")[0]
+            return host in _ALLOWED_HOSTS
+
+        def _rate_ok(self, cred: str) -> bool:
+            now = time.time()
+            w = rl_window.setdefault(cred, deque())
+            while w and now - w[0] > 60.0:
+                w.popleft()
+            if len(w) >= RATE_LIMIT:
+                return False
+            w.append(now)
+            return True
+
+        def _replay_ok(self) -> bool:
+            nonce = self.headers.get("X-FAB-Nonce")
+            if not nonce:
+                return True
+            now = time.time()
+            for k, ts in list(seen_nonces.items()):
+                if now - ts > NONCE_WINDOW_S:
+                    del seen_nonces[k]
+            if nonce in seen_nonces:
+                return False
+            seen_nonces[nonce] = now
+            return True
+
         def _route(self) -> None:
-            if not self._auth_ok():
+            if not self._host_ok():
+                return self._send(403, {"error": {
+                    "code": "FAB-FORBIDDEN",
+                    "message": "host rejected (loopback only)"}})
+            auth = self._auth()
+            cred = (auth or {}).get("actor") or self.headers.get(
+                "Authorization", "")[-16:]
+            if not self._rate_ok(cred):
+                return self._send(429, {"error": {
+                    "code": "FAB-RATE-LIMIT", "message": "rate limit"}})
+            if not self._replay_ok():
+                return self._send(409, {"error": {
+                    "code": "FAB-REPLAY", "message": "nonce replay"}})
+            if not self._origin_ok():
+                return self._send(403, {"error": {
+                    "code": "FAB-FORBIDDEN", "message": "origin rejected"}})
+            parts = [p for p in self.path.split("/") if p]
+            # -- unauthenticated pairing exchange (localhost only) ---------
+            if parts == ["pair", "exchange"] and self.command == "POST":
+                try:
+                    b = self._body()
+                    out = pairing.exchange(
+                        str(b.get("pair_token", "")),
+                        str(b.get("device_name", "")),
+                        tuple(b.get("scopes") or ("agent",)))
+                    return self._send(201, out)
+                except BridgeError as e:
+                    return self._send(403 if "FORBIDDEN" in e.code else 422,
+                                      {"error": {"code": e.code,
+                                                 "message": e.message}})
+            if auth is None:
                 return self._send(401, {"error": {"code": "FAB-UNAUTHORIZED",
                                                 "message": "bearer required"}})
-            parts = [p for p in self.path.split("/") if p]
-            try:
-                body = (self._body()
-                        if self.command in ("POST", "PUT", "PATCH") else {})
-            except BridgeError as e:
-                return self._send(422, {"error": {"code": e.code,
-                                                "message": str(e)}})
+            body: dict[str, Any] = {}
+            if self.command in ("POST", "PATCH"):
+                try:
+                    body = self._body()
+                except BridgeError as e:
+                    code = e.code
+                    return self._send(
+                        413 if "TOO-LARGE" in code else 422,
+                        {"error": {"code": code, "message": e.message}})
             if self.command == "GET" and parts == ["status"]:
                 return self._send(200, {"ok": True,
                                         "workspace_root": str(files.root),
@@ -173,16 +294,45 @@ def make_app() -> Any:
                             "path": rel,
                             "content_b64": base64.b64encode(
                                 files.read_bytes(rel)).decode()})
-                    if act == "upload":
-                        data = base64.b64decode(body.get("content_b64", ""))
-                        return self._send(200, files.upload(
-                            rel, data, approved=bool(body.get("approved"))))
-                    if act == "history":
-                        return self._send(200, {"items": files.history(rel)})
-                    if act == "restore":
+                    if act in ("upload", "restore"):
+                        # §25.4 — mutating file ops need a bound approval
+                        # token whose args digest matches this exact call.
+                        op_args = ({"path": rel,
+                                    "content_b64": body.get(
+                                        "content_b64", "")}
+                                   if act == "upload"
+                                   else {"path": rel,
+                                         "version": str(
+                                             body.get("version", ""))})
+                        tok = str(body.get("approval_token", ""))
+                        broker.authorize(
+                            actor=auth, op=f"files:{act}",
+                            resource=f"file:{rel}",
+                            session_id=str(body.get("session_id", "")),
+                            tool="files")
+                        if not tok:
+                            req = approvals.request(
+                                session_id=str(body.get("session_id", "")),
+                                actor=auth.get("actor", "local"),
+                                resource=f"file:{rel}", action=act,
+                                args=op_args, risk="high")
+                            return self._send(409, {"error": {
+                                "code": "FAB-APPROVAL-REQUIRED",
+                                "message": "approval required"},
+                                "approval_request": req})
+                        approvals.consume(
+                            tok, session_id=str(body.get("session_id", "")),
+                            resource=f"file:{rel}", action=act, args=op_args)
+                        if act == "upload":
+                            data = base64.b64decode(
+                                body.get("content_b64", ""))
+                            return self._send(200, files.upload(
+                                rel, data, approved=True))
                         return self._send(200, files.restore(
                             rel, str(body.get("version", "")),
-                            approved=bool(body.get("approved"))))
+                            approved=True))
+                    if act == "history":
+                        return self._send(200, {"items": files.history(rel)})
                     return self._send(404, {"error": {"code": "FAB-404",
                                                     "message": "unknown file op"}})
                 except BridgeError as e:
@@ -200,13 +350,20 @@ def make_app() -> Any:
                     return self._send(200, {"items": runners.list()})
                 if self.command == "POST" and len(parts) == 1:
                     try:
+                        from .ssrf import validate_runner_url
+                        endpoint = body.get("endpoint")
+                        if endpoint:
+                            endpoint = validate_runner_url(
+                                str(endpoint),
+                                allow_loopback=bool(
+                                    body.get("allow_loopback")))
                         r = runners.register(
                             str(body["id"]), str(body.get("kind", "remote")),
-                            endpoint=body.get("endpoint"),
+                            endpoint=endpoint,
                             labels=body.get("labels"),
                             quota_sessions=int(body.get("quota_sessions", 8)))
                         audit.emit("runner.register",
-                                   self.headers.get("X-FAB-Principal", "local"),
+                                   auth.get("actor", "local"),
                                    runner=r["id"], kind=r["kind"])
                         return self._send(201, r)
                     except Exception as e:  # noqa: BLE001
@@ -215,6 +372,16 @@ def make_app() -> Any:
                                                         "message": str(e)}})
                 if len(parts) == 3 and parts[2] == "health" and self.command == "POST":
                     try:
+                        r = next((x for x in runners.list()
+                                  if x["id"] == parts[1]), None)
+                        if r is None:
+                            raise BridgeError("FAB-NOT-FOUND",
+                                              "unknown runner")
+                        if r.get("endpoint"):
+                            from .ssrf import probe
+                            r["state"] = probe(str(r["endpoint"]),
+                                               parts[1])["state"]
+                            return self._send(200, r)
                         return self._send(200, runners.health(parts[1]))
                     except Exception as e:  # noqa: BLE001
                         return self._send(404, {"error": {
@@ -229,7 +396,7 @@ def make_app() -> Any:
                             "code": getattr(e, "code", "FAB-ERROR"),
                             "message": str(e)}})
                     audit.emit("runner.deregister",
-                               self.headers.get("X-FAB-Principal", "local"),
+                               auth.get("actor", "local"),
                                runner=parts[1])
                     return self._send(200 if ok else 404, {"drained": ok})
             # -- budgets (§23.4) ------------------------------------------------
@@ -243,26 +410,82 @@ def make_app() -> Any:
                             str(body["scope"]), str(body["key"]),
                             str(body["window"]), int(body["tokens"]))
                         audit.emit("budget.limit",
-                                   self.headers.get("X-FAB-Principal", "local"),
-                                   **lim)
+                                   auth.get("actor", "local"), **lim)
                         return self._send(201, lim)
                     except Exception as e:  # noqa: BLE001
                         code = getattr(e, "code", "FAB-ERROR")
                         return self._send(422, {"error": {"code": code,
                                                         "message": str(e)}})
+            # -- pairing management (§25.6) ------------------------------------
+            if parts and parts[0] == "pair":
+                if self.command == "POST" and parts == ["pair", "rotate"]:
+                    try:
+                        out = pairing.rotate(str(body.get("pair_token", "")))
+                        return self._send(200, out)
+                    except BridgeError as e:
+                        return self._send(
+                            403 if "FORBIDDEN" in e.code else 422,
+                            {"error": {"code": e.code,
+                                       "message": e.message}})
+                if self.command == "GET" and parts == ["pair", "devices"]:
+                    return self._send(200, {"items": pairing.devices()})
+                if (self.command == "DELETE" and len(parts) == 3
+                        and parts[1] == "devices"):
+                    ok = pairing.revoke_device(parts[2])
+                    audit.emit("pair.revoke", auth.get("actor", "local"),
+                               device=parts[2])
+                    return self._send(200 if ok else 404, {"revoked": ok})
+            # -- approval tokens (§25.4) ----------------------------------------
+            if parts and parts[0] == "approvals":
+                if self.command == "GET":
+                    sid = str(body.get("session_id", "")) or \
+                        self.path.split("session_id=")[-1] \
+                        if "session_id=" in self.path else ""
+                    return self._send(200, {
+                        "items": approvals.pending_for(sid)})
+                if (self.command == "POST" and len(parts) == 3
+                        and parts[2] == "resolve"):
+                    try:
+                        out = approvals.resolve(
+                            parts[1],
+                            approved=bool(body.get("approved")),
+                            actor=auth.get("actor", "local"))
+                        audit.emit("approval.resolve",
+                                   auth.get("actor", "local"),
+                                   approval_id=parts[1],
+                                   approved=bool(body.get("approved")))
+                        return self._send(200, out)
+                    except BridgeError as e:
+                        return self._send(
+                            403 if "FORBIDDEN" in e.code else 404,
+                            {"error": {"code": e.code,
+                                       "message": e.message}})
             # -- audit trail (§23.2) --------------------------------------------
             if self.command == "GET" and parts == ["audit"]:
                 return self._send(200, {"items": audit.tail(
                     int(self.headers.get("X-Tail", "50")))})
             if self.command == "POST" and parts == ["sessions"]:
+                # §25.2 — typed ops only; the client never supplies argv.
+                op = str(body.get("op", ""))
+                if op != "spawn-provider":
+                    return self._send(422, {"error": {
+                        "code": "FAB-VALIDATION",
+                        "message": "op must be 'spawn-provider'"}})
+                provider = str(body.get("provider", ""))
+                try:
+                    o = _orch(provider)
+                    argv = list(getattr(o.adapter, "SPAWN_ARGV",
+                                        [getattr(o.adapter, "EXE",
+                                                 provider)]))
+                except Exception as e:  # noqa: BLE001 — adapter init varies
+                    return self._send(422, {"error": {
+                        "code": getattr(e, "code", "FAB-VALIDATION"),
+                        "message": f"unknown provider {provider!r}"}})
                 from .contracts import new_id
                 sid = new_id("ses")
-                cmd = body.get("cmd")
-                if not isinstance(cmd, list) or not all(isinstance(c, str) for c in cmd):
-                    return self._send(422, {"error": {"code": "FAB-VALIDATION",
-                                                    "message": "cmd must be a string list"}})
-                supervisor.spawn(sid, cmd, cwd=body.get("cwd", "."))
-                return self._send(201, {"session_id": sid})
+                supervisor.spawn(sid, argv, cwd=body.get("cwd", "."))
+                return self._send(201, {"session_id": sid,
+                                        "provider": provider})
             if self.command == "POST" and parts == ["agent-sessions"]:
                 provider = str(body.get("provider", "fake"))
                 try:
@@ -279,11 +502,10 @@ def make_app() -> Any:
                                 workspace_id=s.workspace_id,
                                 title=body.get("title") or "")
                     collab.share(s.id,
-                                 owner=self.headers.get("X-FAB-Principal",
-                                                        "local"),
+                                 owner=_principal(auth, s.id, self.headers),
                                  visibility=body.get("visibility", "private"))
                     audit.emit("session.create",
-                               self.headers.get("X-FAB-Principal", "local"),
+                               auth.get("actor", "local"),
                                session=s.id, provider=provider,
                                runner=runner)
                     out = s.model_dump(mode="json")
@@ -330,13 +552,21 @@ def make_app() -> Any:
                 provider = body.get("provider") or _session_provider(sid)
                 try:
                     o = _orch(provider)
-                    principal = _principal(self.headers, sid)
+                    principal = _principal(auth, sid, self.headers)
                     if action == "prompt" and self.command == "POST":
                         text = str(body.get("text", ""))
                         if not text:
                             return self._send(422, {"error": {"code": "FAB-VALIDATION",
                                                             "message": "text required"}})
-                        collab.assert_can_act(sid, principal)
+                        broker.authorize(
+                            actor=auth, op="prompt",
+                            resource=f"agent-session:{sid}",
+                            session_id=sid,
+                            product_id=str(
+                                meta.get(sid).get("product_id") or ""),
+                            workspace_id=str(
+                                meta.get(sid).get("workspace_id") or ""),
+                            principal=principal, collab=collab)
                         budgets.check(_scope_map(sid, provider, principal))
                         o.prompt(sid, text,
                                  attachments=body.get("attachments"))

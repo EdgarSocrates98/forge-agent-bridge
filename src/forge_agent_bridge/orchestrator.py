@@ -60,6 +60,19 @@ class BridgeOrchestrator:
                           "params": {"session_id": s.id, "ref": session_ref}})
         return s
 
+    def artifacts(self, session_id: str) -> list[dict[str, Any]]:
+        """Artifacts derived from buffered events (§22.1) — real data."""
+        self._require(session_id)
+        out: list[dict[str, Any]] = []
+        for e in self.buffers[session_id].replay():
+            if e["type"].startswith("artifact."):
+                out.append({"event_id": e["id"], "type": e["type"],
+                            "seq": e["seq"], **e["payload"]})
+            elif e["type"] == "tool.completed" and e["payload"].get("path"):
+                out.append({"event_id": e["id"], "type": "tool.output",
+                            "seq": e["seq"], "path": e["payload"]["path"]})
+        return out
+
     def approve(self, session_id: str, approval_id: str, approved: bool) -> None:
         self._require(session_id)
         self.adapter.respond_to_approval(approval_id, approved)

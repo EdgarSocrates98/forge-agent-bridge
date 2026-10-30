@@ -100,7 +100,8 @@ class AcpAdapter:
         client.start()
         try:
             client.initialize()
-            acp_sid = client.new_session(cwd=kw.get("cwd") or ".")
+            acp_sid = client.new_session(cwd=kw.get("cwd") or ".",
+                                         mcp_servers=kw.get("mcp_servers"))
         except Exception:
             client.close()
             raise

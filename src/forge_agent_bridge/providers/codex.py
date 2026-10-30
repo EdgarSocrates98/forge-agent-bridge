@@ -106,6 +106,9 @@ class CodexAdapter:
 
     def create_session(self, **kw: Any) -> AgentSession:
         self.initialize()
+        if kw.get("mcp_servers"):
+            raise UnsupportedCapabilityError(
+                "mcp_servers (use ~/.codex/config.toml)", provider="codex")
         s = AgentSession(id=new_id("ses"), provider="codex",
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),

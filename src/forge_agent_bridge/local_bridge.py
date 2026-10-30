@@ -87,8 +87,10 @@ def make_app() -> Any:
     token = pair_token()
     supervisor = ProcessSupervisor()
     orchs: dict[str, Any] = {}  # provider → orchestrator
+    from .files import FileService
     from .metadata import SessionMetaStore
     meta = SessionMetaStore()
+    files = FileService(Path.cwd())  # workspace root = bridge launch dir
 
     def _orch(provider: str) -> Any:
         from .orchestrator import build_orchestrator
@@ -126,7 +128,41 @@ def make_app() -> Any:
             body = self._body() if self.command in ("POST", "PUT", "PATCH") else {}
             if self.command == "GET" and parts == ["status"]:
                 return self._send(200, {"ok": True,
+                                        "workspace_root": str(files.root),
                                         "running": supervisor.running()})
+            if self.command == "POST" and parts and parts[0] == "files":
+                import base64
+
+                from .adapter import BridgeError
+                try:
+                    act = parts[1] if len(parts) > 1 else ""
+                    rel = str(body.get("path", "."))
+                    if act == "list":
+                        return self._send(200, {"items": files.list_dir(rel),
+                                                "root": str(files.root)})
+                    if act == "preview":
+                        return self._send(200, files.preview(rel))
+                    if act == "download":
+                        return self._send(200, {
+                            "path": rel,
+                            "content_b64": base64.b64encode(
+                                files.read_bytes(rel)).decode()})
+                    if act == "upload":
+                        data = base64.b64decode(body.get("content_b64", ""))
+                        return self._send(200, files.upload(
+                            rel, data, approved=bool(body.get("approved"))))
+                    if act == "history":
+                        return self._send(200, {"items": files.history(rel)})
+                    if act == "restore":
+                        return self._send(200, files.restore(
+                            rel, str(body.get("version", "")),
+                            approved=bool(body.get("approved"))))
+                    return self._send(404, {"error": {"code": "FAB-404",
+                                                    "message": "unknown file op"}})
+                except BridgeError as e:
+                    return self._send(403 if "FORBIDDEN" in e.code else 422,
+                                      {"error": {"code": e.code,
+                                                 "message": e.message}})
             if self.command == "GET" and parts == ["providers"]:
                 from .registry import REGISTRY
                 return self._send(200, {"items": [
@@ -146,7 +182,8 @@ def make_app() -> Any:
                 try:
                     s = _orch(provider).create_session(
                         product_id=body.get("product_id"),
-                        workspace_id=body.get("workspace_id"))
+                        workspace_id=body.get("workspace_id"),
+                        mcp_servers=body.get("mcp_servers"))
                     meta.upsert(s.id, provider=provider,
                                 product_id=s.product_id,
                                 workspace_id=s.workspace_id,
@@ -222,6 +259,8 @@ def make_app() -> Any:
                         o.approve(sid, str(body.get("approval_id", "")),
                                   bool(body.get("approved")))
                         return self._send(200, {"resolved": True})
+                    if action == "artifacts" and self.command == "POST":
+                        return self._send(200, {"items": o.artifacts(sid)})
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
                     return self._send(502, {"error": {"code": code,

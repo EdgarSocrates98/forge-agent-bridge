@@ -294,6 +294,63 @@ def main() -> int:
           f"got {st}")
     log("pf-citation", chunk=(cites or [{}])[0].get("chunk_id"))
 
+    # ---------- §12 Payments API flow: SQL, dashboard, report, decision -----
+    pid = "prd_017179b95798"
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/validate", "POST",
+                {"statement": "SELECT code, name, count FROM api_errors "
+                              "ORDER BY count DESC", "dialect": "sqlite"},
+                token=pf_tok)
+    check("pf-sql-validate", st == 200 and
+          b.get("data", {}).get("valid") is not False, f"got {st} {b}")
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/execute", "POST",
+                {"statement": "SELECT code, name, count FROM api_errors "
+                              "ORDER BY count DESC",
+                 "source_id": "src_24377b6de02c", "row_limit": 10},
+                token=pf_tok)
+    run = b.get("data", {})
+    check("pf-sql-execute", st == 200 and run.get("status") == "completed"
+          and (run.get("rows") or 0) >= 1,
+          f"got {st} status={run.get('status')} rows={run.get('rows')}")
+    log("pf-sql", sample=(run.get("result_preview") or [])[:1])
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/execute", "POST",
+                {"statement": "DROP TABLE api_errors",
+                 "source_id": "src_24377b6de02c"}, token=pf_tok)
+    wr = b.get("data", {})
+    check("pf-sql-write-blocked",
+          st != 200 or wr.get("status") in ("rejected", "failed"),
+          f"got {st} status={wr.get('status')}")
+
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/dashboards", "POST",
+                {"name": "e2e-error-rates",
+                 "cards": [{"title": "error counts",
+                            "source_id": "src_24377b6de02c",
+                            "statement": "SELECT code, count FROM api_errors"}]},
+                token=pf_tok)
+    did = b.get("data", {}).get("id") or b.get("data", {}).get("dashboard", {}).get("id")
+    check("pf-dashboard-create", st in (200, 201) and bool(did), f"got {st} {b}")
+    if did:
+        st, b = req(PFAPI, f"/api/v1/products/{pid}/dashboards/{did}/render",
+                    "POST", {}, token=pf_tok)
+        check("pf-dashboard-render", st == 200, f"got {st}")
+
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/reports/executive", "POST",
+                {"title": "e2e weekly"}, token=pf_tok)
+    rid = b.get("data", {}).get("id") or b.get("data", {}).get("report", {}).get("id")
+    check("pf-report-executive", st in (200, 201) and bool(rid), f"got {st} {b}")
+
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/decisions", "POST",
+                {"title": "e2e: retry 4091 with backoff",
+                 "rationale": "vault timeout is transient per api_errors.md",
+                 "status": "accepted"}, token=pf_tok)
+    check("pf-decision-create", st in (200, 201), f"got {st} {b}")
+
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/budget", token=pf_tok)
+    check("pf-budget", st == 200, f"got {st}")
+    st, b = req(PFAPI, "/api/v1/audit", token=pf_tok)
+    audit_items = (b.get("data", {}).get("items") or [])
+    check("pf-audit-trail", st == 200 and len(audit_items) >= 1,
+          f"got {st} n={len(audit_items)}")
+
     # ---------- Chromium on the real portal ---------------------------------
     try:
         from playwright.sync_api import sync_playwright

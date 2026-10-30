@@ -164,6 +164,8 @@ def make_app() -> Any:
     from .events import DurableEventStore, seq_floor
     ctxs = ContextStore()
     mcp_fed = MCPFederation()
+    from .pf_context import PFContextClient
+    pf_client = PFContextClient.from_env()
     event_store = DurableEventStore(state_dir() / "events")
     # seq continuity across restarts — resume above max persisted seq
     _max_seq = 0
@@ -199,6 +201,89 @@ def make_app() -> Any:
 
     def _session_provider(sid: str, fallback: str = "fake") -> str:
         return str(meta.get(sid).get("provider") or fallback)
+
+    def _pf_authorize(sc_ctx: Any, sid: str, provider: str,
+                      principal: str, meta_store: Any,
+                      client: Any) -> Any:
+        """§30.2/§5.4 — request a server-issued v2 context from Product
+        Forge and merge it into the bound context. Real denials
+        (unknown product, workspace out of scope) always fail closed;
+        unreachable PF fails closed only under FAB_PF_VERIFY=required,
+        otherwise the binding is recorded as honestly `unverified`."""
+        from .pf_context import PFContextClient, PFHttpError, PFUnreachable
+        mode = PFContextClient.mode()
+        if client is None:
+            meta_store.upsert(sid, pf_verify="unverified:not-configured")
+            if mode == "required":
+                raise BridgeError(
+                    "FAB-UNAVAILABLE",
+                    "product binding requires FAB_PF_BASE_URL/FAB_PF_TOKEN")
+            return sc_ctx
+        try:
+            rec = client.authorize(
+                principal=principal, product_id=str(sc_ctx.product_id),
+                workspace_id=sc_ctx.workspace_id, session_id=sid,
+                provider=provider, agent_profile=sc_ctx.agent_profile)
+        except PFUnreachable:
+            if mode == "required":
+                raise
+            meta_store.upsert(sid, pf_verify="unverified:unreachable")
+            audit.emit("context.verify", principal, session=sid,
+                           outcome="unverified:unreachable")
+            return sc_ctx
+        except PFHttpError:
+            # a real authorization denial (404/403/422) — always fail closed
+            raise
+        meta_store.upsert(sid, pf_verify="verified",
+                          pf_context_id=rec["id"])
+        allowed_tools = [str(t) for t in rec.get("allowed_tools") or ["chat"]]
+        return sc_ctx.model_copy(update={
+            "workspace_id": rec.get("workspace_id") or sc_ctx.workspace_id,
+            "allowed_knowledge_sources":
+                [str(x) for x in rec.get("allowed_knowledge") or []],
+            "allowed_datasets": [str(x) for x in rec.get("allowed_datasets") or []],
+            "allowed_metrics": [str(x) for x in rec.get("allowed_metrics") or []],
+            "allowed_apis": [str(x) for x in rec.get("allowed_apis") or []],
+            "allowed_tools": allowed_tools,
+            "policy_version": str(rec.get("policy_version") or
+                                  sc_ctx.policy_version),
+            "context_version": int(rec.get("context_version") or 1),
+            "issued_at": str(rec.get("issued_at") or ""),
+            "expires_at": rec.get("expires_at_ts"),
+            "revocation_ref": str(rec.get("revocation_ref") or ""),
+            "server_ref": str(rec["id"]),
+        })
+
+    def _pf_verify_prompt(sid: str, principal: str) -> None:
+        """Prompt-time re-verification of the PF-issued context —
+        existence, revocation and expiry are re-checked against Product
+        Forge (TTL-cached)."""
+        if pf_client is None:
+            return
+        rec = ctxs.get(sid)
+        sref = (rec or {}).get("server_ref") or ""
+        if not sref:
+            return  # unverified binding — already recorded at create
+        from .pf_context import PFContextClient, PFHttpError, PFUnreachable
+        try:
+            st = pf_client.check(sref)
+        except PFUnreachable:
+            if PFContextClient.mode() == "required":
+                raise BridgeError(
+                    "FAB-UNAVAILABLE",
+                    "product-forge unreachable; FAB_PF_VERIFY=required")
+            meta.upsert(sid, pf_verify="unverified:unreachable")
+            return
+        except PFHttpError as e:
+            ctxs.revoke(sid)
+            raise BridgeError("FAB-FORBIDDEN",
+                              f"product context check failed: {e}") from e
+        state = st.get("state", "active")
+        if state != "active":
+            ctxs.revoke(sid)
+            meta.upsert(sid, pf_verify=f"revoked:{state}")
+            raise BridgeError("FAB-FORBIDDEN",
+                              f"product context {state}")
 
     class H(BaseHTTPRequestHandler):
         timeout = 30  # socket read timeout (§25.5 request timeout)
@@ -725,10 +810,23 @@ def make_app() -> Any:
                         and parts[1] == "revoke"):
                     sid = str((body or {}).get("session_id", ""))
                     revoked = ctxs.revoke(sid)
+                    # §30.2 — propagate revocation to the PF-issued
+                    # context so a stale server_ref cannot be re-used.
+                    sref = (revoked or {}).get("server_ref")
+                    pf_revoked = None
+                    if sref and pf_client is not None:
+                        try:
+                            pf_client.revoke(sref)
+                            pf_revoked = True
+                        except Exception:  # noqa: BLE001 — local revoke stands
+                            pf_revoked = False
                     audit.emit("context.revoked", auth.get("actor", "local"),
                                session=sid,
                                context_version=revoked.get("context_version"))
-                    return self._send(200, {"revoked": True, "session_id": sid})
+                    out = {"revoked": True, "session_id": sid}
+                    if pf_revoked is not None:
+                        out["pf_revoked"] = pf_revoked
+                    return self._send(200, out)
                 if (self.command == "GET" and len(parts) == 2
                         and parts[1] == "deltas"):
                     qs = parse_qs(urlparse(self.path).query)
@@ -780,16 +878,27 @@ def make_app() -> Any:
                     collab.share(s.id,
                                  owner=_principal(auth, s.id, self.headers),
                                  visibility=body.get("visibility", "private"))
-                    # §27.1 — bind forge/ProductAgentSessionContext/v1
+                    # §27.1 — bind forge/ProductAgentSessionContext/v2
                     from .context import ProductAgentSessionContext
                     sc = body.get("context") or {}
                     sc_ctx = ProductAgentSessionContext.model_validate({
                         **sc,
                         "identity": _principal(auth, s.id, self.headers),
                         "provider": provider,
+                        "session_id": s.id,
                         "product_id": sc.get("product_id") or s.product_id,
                         "workspace_id": sc.get("workspace_id") or s.workspace_id,
                     })
+                    # §30.2/§5.4 — server-side product authorization:
+                    # ask Product Forge to issue the bound context so
+                    # product/workspace existence + scope are validated
+                    # there, not trusted from the client. FAB_PF_VERIFY
+                    # controls fail-closed vs honest-unverified.
+                    if sc_ctx.product_id:
+                        sc_ctx = _pf_authorize(
+                            sc_ctx, s.id, provider,
+                            _principal(auth, s.id, self.headers),
+                            meta, pf_client)
                     ctxs.bind(s.id, sc_ctx)
                     # §27.5 — requested MCP servers are filtered through the
                     # federated registry + context allowlist (honest denial)
@@ -867,6 +976,7 @@ def make_app() -> Any:
                                 meta.get(sid).get("workspace_id") or ""),
                             principal=principal, collab=collab)
                         ctxs.assert_allowed(sid)  # §27.6 context gate
+                        _pf_verify_prompt(sid, principal)  # §30.2 re-verify
                         budgets.check(_scope_map(sid, provider, principal))
                         o.prompt(sid, text,
                                  attachments=body.get("attachments"))

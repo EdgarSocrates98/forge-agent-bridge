@@ -1,0 +1,13 @@
+{
+ "checks": {
+  "bound_v2": true,
+  "server_ref": true,
+  "verified": true,
+  "prompt_active": true,
+  "prompt_blocked_after_revoke": true,
+  "unknown_product_denied": true
+ },
+ "product": "prd_da8880ac8de8",
+ "session": "ses_bskzcjuh39tx",
+ "context_id": "ctx_961c1e6de270"
+}

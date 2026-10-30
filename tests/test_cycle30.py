@@ -74,7 +74,7 @@ def test_context_contract(srv):
     sid = s["id"]
     st, ctx = _req(port, tok, "GET", f"/context/{sid}")
     if st == 200:
-        assert ctx["schema"] == "forge/ProductAgentSessionContext/v1"
+        assert ctx["schema"] == "forge/ProductAgentSessionContext/v2"
 
 
 def test_recovery_plan_contract(srv):

@@ -16,7 +16,8 @@ from .local_bridge import state_dir
 
 FIELDS = {"title", "product_id", "workspace_id", "favorite", "archived",
           "visibility", "notes", "provider",
-          "context_version", "policy_version"}
+          "context_version", "policy_version",
+          "pf_verify", "pf_context_id"}
 
 
 class SessionMetaStore:

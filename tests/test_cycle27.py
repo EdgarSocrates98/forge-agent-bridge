@@ -22,7 +22,7 @@ def test_context_bound_on_create(srv) -> None:
         "allowed_knowledge_sources": ["src-1"],
         "context_version": 7})
     ctx = s["context"]
-    assert ctx["schema"] == "forge/ProductAgentSessionContext/v1"
+    assert ctx["schema"] == "forge/ProductAgentSessionContext/v2"
     assert ctx["product_id"] == "payments"
     assert ctx["context_version"] == 7
     assert ctx["identity"]                # bound to authenticated actor

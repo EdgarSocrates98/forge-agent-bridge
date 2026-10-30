@@ -21,19 +21,24 @@ from pydantic import BaseModel, Field
 
 from .adapter import BridgeError
 
-CONTEXT_SCHEMA = "forge/ProductAgentSessionContext/v1"
+CONTEXT_SCHEMA = "forge/ProductAgentSessionContext/v2"
 DELTA_SCHEMA = "forge/AgentContextDelta/v1"
 MCP_SCHEMA = "forge/MCPServerDescriptor/v1"
 
 
 class ProductAgentSessionContext(BaseModel):
-    """forge/ProductAgentSessionContext/v1 — session context binding."""
+    """forge/ProductAgentSessionContext/v2 — session context binding.
+
+    v2 adds: session_id, issued_at, revocation_ref and server_ref — the
+    Product Forge-issued context id used for prompt-time re-verification
+    of product/workspace existence and revocation (§30.2/§5.4)."""
 
     schema_: str = Field(default=CONTEXT_SCHEMA, alias="schema")
     identity: str = ""                       # principal bound at create
     workspace_id: str | None = None
     product_id: str | None = None
     provider: str = ""
+    session_id: str = ""                     # bound session (v2)
     agent_profile: str = "default"
     allowed_knowledge_sources: list[str] = Field(default_factory=list)
     allowed_datasets: list[str] = Field(default_factory=list)
@@ -45,7 +50,10 @@ class ProductAgentSessionContext(BaseModel):
     budget_usd: float | None = None
     context_version: int = 1
     policy_version: str = "forge/PolicyBundle/1"
+    issued_at: str = ""                      # v2 — issue timestamp
     expires_at: float | None = None
+    revocation_ref: str = ""                 # v2 — revocation handle
+    server_ref: str = ""                     # v2 — PF-issued context id
     trust: str = "active"                    # active|revoked
     context_policy: str = "context_optional"  # context_optional|context_required
 

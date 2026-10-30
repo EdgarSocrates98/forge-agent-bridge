@@ -79,3 +79,47 @@ Playwright mid-turn streaming/cancel/reconnect spec are still open work.
 `Ready with restrictions`. No P0 open: the two real defects found via
 live Codex probing are fixed with regressions and pushed. Everything
 above marked open is an explicitly named state, not a hidden failure.
+
+## Addendum — second session (2026-10-30)
+
+### Closed items
+- **PF v2 prompt-time re-verification** (`fb7ac27` + product-forge `810bcf5`):
+  `forge/ProductAgentSessionContext/v2` issued by PF `POST /context/authorize`;
+  bridge re-verifies at prompt time; PF revoke → 403. Live probe: all 6
+  checks green (bound_v2, server_ref, verified, prompt_active,
+  prompt_blocked_after_revoke, unknown_product_denied).
+- **Portable e2e harness** (`0370a0e`): dynamic FORGE_ROOT/repo overrides,
+  dynamic ports, temp PF/FAB homes, real PF seeding via API (workspace,
+  products, knowledge doc, sqlite source) — server-assigned ids threaded
+  through. 42/42 checks green end-to-end.
+- **Playwright mid-turn streaming** (`c6eb469` + portal `9841d77`): real
+  Chromium, real fake-provider session, composer submit, in-browser SSE with
+  Last-Event-ID reconnect + dedup. Surfaced and fixed 2 real CORS bugs
+  (SSE missing ACAO; preflight missing Last-Event-ID).
+- **Diagnostic Center + MCP Doctor** (bridge `5274b7e` + portal `0e45d40`):
+  `GET /diagnostics` + `GET /mcp/doctor`; `/pf/diagnostics` page with
+  provider records, per-server checks classified
+  host|mcp|credential|provider|network|config, safe corrective suggestions.
+  Browser e2e passes against seeded broken server.
+- **Release compat checker** (`scripts/compat_check.py`): discovers all 3
+  repos, resolves static + Hatch-dynamic versions, reports provider
+  versions; exit 0 on current workspace.
+
+### Per-provider 35-step Payments matrix (honest)
+| Provider | Flow coverage | Evidence |
+|---|---|---|
+| devin | full (35/35 via e2e + streaming/usage/resume) | e2e_cycle30_1 JSONL + prior cycle evidence |
+| codex | session/stream/resume verified; approvals unsupported | `docs/providers/evidence/codex/0.163.0/` |
+| fake | full scripted flow (browser spec) | portal e2e artifacts |
+| copilot | 30.1 live run only; native tool-call/cancel unverified | prior cycle |
+| claude-code | `unavailable:auth` — needs `claude login` | LIVE_CAPABILITY_MATRIX |
+| bedrock | `unavailable:AccessDeniedException` | prior cycle |
+
+### Still open (named restrictions)
+- 35-step Payments run executed per-provider only for devin+fake+codex
+  (codex partially). A single unified 35-step Playwright spec per provider
+  remains future work; current coverage is distributed across the e2e
+  harness + browser specs cited above.
+- Claude Code auth, Bedrock account access — blocked on user credentials.
+- Copilot/Codex native approval/deny/cancel/subagent probes.
+- `compat_check.py` is a CLI script, not a compiled binary.

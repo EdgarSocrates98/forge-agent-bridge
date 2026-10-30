@@ -86,6 +86,13 @@ def make_app() -> Any:
 
     token = pair_token()
     supervisor = ProcessSupervisor()
+    orchs: dict[str, Any] = {}  # session_id → orchestrator
+
+    def _orch(provider: str) -> Any:
+        from .orchestrator import build_orchestrator
+        if provider not in orchs:
+            orchs[provider] = build_orchestrator(provider)
+        return orchs[provider]
 
     class H(BaseHTTPRequestHandler):
         def _auth_ok(self) -> bool:
@@ -111,6 +118,7 @@ def make_app() -> Any:
                 return self._send(401, {"error": {"code": "FAB-UNAUTHORIZED",
                                                 "message": "bearer required"}})
             parts = [p for p in self.path.split("/") if p]
+            body = self._body() if self.command in ("POST", "PUT", "PATCH") else {}
             if self.command == "GET" and parts == ["status"]:
                 return self._send(200, {"ok": True,
                                         "running": supervisor.running()})
@@ -121,7 +129,6 @@ def make_app() -> Any:
                     for d in REGISTRY.detect_all()]})
             if self.command == "POST" and parts == ["sessions"]:
                 from .contracts import new_id
-                body = self._body()
                 sid = new_id("ses")
                 cmd = body.get("cmd")
                 if not isinstance(cmd, list) or not all(isinstance(c, str) for c in cmd):
@@ -129,6 +136,39 @@ def make_app() -> Any:
                                                     "message": "cmd must be a string list"}})
                 supervisor.spawn(sid, cmd, cwd=body.get("cwd", "."))
                 return self._send(201, {"session_id": sid})
+            if self.command == "POST" and parts == ["agent-sessions"]:
+                try:
+                    s = _orch(body.get("provider", "fake")).create_session(
+                        product_id=body.get("product_id"),
+                        workspace_id=body.get("workspace_id"))
+                    return self._send(201, s.model_dump(mode="json"))
+                except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
+                    code = getattr(e, "code", "FAB-ERROR")
+                    return self._send(502, {"error": {"code": code,
+                                                    "message": str(e)}})
+            if len(parts) == 3 and parts[0] == "agent-sessions":
+                sid, action = parts[1], parts[2]
+                provider = body.get("provider", "fake")
+                try:
+                    o = _orch(provider)
+                    if action == "prompt" and self.command == "POST":
+                        text = str(body.get("text", ""))
+                        if not text:
+                            return self._send(422, {"error": {"code": "FAB-VALIDATION",
+                                                            "message": "text required"}})
+                        o.prompt(sid, text)
+                        o.drain(sid)
+                        return self._send(200, {"accepted": True})
+                    if action == "events" and self.command == "POST":
+                        after = int(body.get("after_seq", 0))
+                        return self._send(200, {"items": o.replay(sid, after)})
+                    if action == "cancel" and self.command == "POST":
+                        o.cancel(sid)
+                        return self._send(200, {"cancelled": True})
+                except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
+                    code = getattr(e, "code", "FAB-ERROR")
+                    return self._send(502, {"error": {"code": code,
+                                                    "message": str(e)}})
             if len(parts) == 2 and parts[0] == "sessions" and self.command == "DELETE":
                 ok = supervisor.terminate(parts[1])
                 return self._send(200 if ok else 404, {"terminated": ok})

@@ -177,3 +177,38 @@ def test_orchestrator_full_flow():
         raise AssertionError("expected error")
     except BridgeError as e:
         assert e.code == "FAB-SESSION"
+
+
+def test_local_bridge_agent_session_http(tmp_path, monkeypatch):
+    """Cycle 20 wire — create session → prompt → events over HTTP."""
+    import http.client
+    import threading
+
+    from forge_agent_bridge import local_bridge
+
+    monkeypatch.setattr(local_bridge, "STATE_DIR", tmp_path / "fb")
+    tok = local_bridge.pair_token()
+    handler, sup = local_bridge.make_app()
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    hdr = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port)
+        c.request("POST", "/agent-sessions",
+                  body='{"provider":"fake","product_id":"p1"}', headers=hdr)
+        r = c.getresponse()
+        sid = json.loads(r.read())["id"]
+        assert r.status == 201
+        c.request("POST", f"/agent-sessions/{sid}/prompt",
+                  body='{"text":"hi","provider":"fake"}', headers=hdr)
+        assert c.getresponse().status == 200
+        c.request("POST", f"/agent-sessions/{sid}/events",
+                  body='{"provider":"fake","after_seq":0}', headers=hdr)
+        evs = json.loads(c.getresponse().read())["items"]
+        assert any(e["type"] == "message.completed" for e in evs)
+        assert all(e["schema"] == "forge/AgentBridgeEvent/v1" for e in evs)
+    finally:
+        srv.shutdown()
+        sup.terminate_all()

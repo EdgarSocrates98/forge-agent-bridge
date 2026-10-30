@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge-agent-bridge"
+version = "0.1.0"
+description = "Forge Agent Bridge — universal agent session/event/approval contracts and provider adapters (Claude Code, Codex, Devin)"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6", "typer>=0.12"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+forge-bridge = "forge_agent_bridge.cli:main"
+
+[tool.hatch.version]
+path = "src/forge_agent_bridge/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forge_agent_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]

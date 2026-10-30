@@ -1,0 +1,110 @@
+"""Cycle 19 — bridge foundation contract tests (fake provider per spec)."""
+
+
+def _fake():
+    from forge_agent_bridge.providers.fake import FakeAdapter
+    return FakeAdapter()
+
+
+def test_provider_detection_honest():
+    from forge_agent_bridge.registry import REGISTRY
+    ds = REGISTRY.detect_all()
+    assert len(ds) == 4  # claude, codex, devin, fake
+    fake = next(d for d in ds if d.id == "fake")
+    assert fake.capabilities and all(c.state.value for c in fake.capabilities)
+    real = next(d for d in ds if d.id == "claude-code")
+    assert real.auth_state.value in ("unverified", "unauthenticated")
+
+
+def test_session_lifecycle_and_events():
+    from forge_agent_bridge.events import EventBuffer, normalize
+    a = _fake()
+    a.initialize()
+    s = a.create_session(product_id="p1")
+    assert s.state.value == "active" and s.resumable
+    a.send_prompt(s.id, "hello")
+    buf = EventBuffer(s.id)
+    types = []
+    for native in a.stream_events(s.id):
+        ev = normalize(native, "fake", s.id)
+        assert ev["schema"] == "forge/AgentBridgeEvent/v1"
+        assert ev["seq"] > 0 and ev["session_id"] == s.id
+        assert buf.push(ev)
+        types.append(ev["type"])
+    assert types[0] == "session.created"
+    assert "message.delta" in types and "tool.completed" in types
+    assert "usage.updated" in types
+    # dedupe: re-pushing same event id is rejected
+    assert not buf.push(buf.replay()[0])
+    # replay window
+    assert buf.replay(after_seq=2)
+
+
+def test_resume_cancel_close_and_errors():
+    from forge_agent_bridge.adapter import SessionError
+    a = _fake()
+    s = a.create_session()
+    r = a.resume_session(s.id)
+    assert r.state.value == "active"
+    a.cancel(s.id)
+    assert s.id in a.cancelled
+    a.close_session(s.id)
+    assert a.sessions[s.id].state.value == "closed"
+    try:
+        a.resume_session("nope")
+        raise AssertionError("expected SessionError")
+    except SessionError:
+        pass
+
+
+def test_unmapped_native_event_preserved():
+    from forge_agent_bridge.events import normalize
+    ev = normalize({"type": "vendor.weird", "x": 1}, "p", "s1")
+    assert ev["type"] == "runtime.error"
+    assert ev["payload"]["native_type"] == "vendor.weird"
+    assert ev["raw"]["x"] == 1  # native preserved for diagnostics
+
+
+def test_capability_matrix_states():
+    from forge_agent_bridge.registry import REGISTRY
+    states = {c.state.value for d in REGISTRY.detect_all() for c in d.capabilities}
+    assert "unverified" in states and "requires-configuration" in states
+
+
+def test_acp_client_fake_server():
+    """§19 testes — fake protocol server: initialize + session + prompt."""
+    import subprocess
+    import sys
+    import threading
+
+    srv = subprocess.Popen([sys.executable, "-c", '''
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    m, rid = req["method"], req["id"]
+    if m == "initialize":
+        out = {"jsonrpc":"2.0","id":rid,"result":{"protocolVersion":1}}
+    elif m == "session/new":
+        out = {"jsonrpc":"2.0","id":rid,"result":{"sessionId":"s-1"}}
+    elif m == "session/prompt":
+        out = {"jsonrpc":"2.0","id":rid,"result":{"stopReason":"end_turn"}}
+    else:
+        out = {"jsonrpc":"2.0","id":rid,"error":{"code":-32601,"message":"unknown"}}
+    sys.stdout.write(json.dumps(out) + "\\n"); sys.stdout.flush()
+'''], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    # drive client over the same process pair via a socket-like shim:
+    from forge_agent_bridge.acp import AcpClient
+    # wrap: client expects to spawn; instead reuse the spawned process pipes
+    c = AcpClient([sys.executable, "-c", "pass"])
+    c.proc = srv
+    t = threading.Thread(target=c._read_loop, daemon=True)
+    t.start()
+    res = c.initialize()
+    assert res["protocolVersion"] == 1
+    sid = c.new_session()
+    assert sid == "s-1"
+    pr = c.prompt(sid, "hi")
+    assert pr["stopReason"] == "end_turn"
+    srv.terminate()

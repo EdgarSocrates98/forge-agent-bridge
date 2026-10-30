@@ -32,6 +32,21 @@ import urllib.request
 from pathlib import Path
 
 
+# Re-exec under a playwright-capable interpreter when needed — the harness
+# itself is stdlib-only, but the Chromium evidence step needs playwright.
+def _needs_reexec() -> str | None:
+    try:
+        import playwright  # noqa: F401
+        return None
+    except ImportError:
+        pass
+    cand = os.environ.get("E2E_PY") or str(
+        PORTAL_REPO / ".venv/bin/python")  # resolved at call time
+    if cand and Path(cand).exists() and Path(cand) != Path(sys.executable):
+        return cand
+    return None
+
+
 def _root() -> Path:
     """Repo root discovery: --root/env FORGE_ROOT, else this repo's parent."""
     if os.environ.get("FORGE_ROOT"):
@@ -123,7 +138,55 @@ def wait_http(url: str, timeout: float = 30) -> None:
     raise RuntimeError(f"timeout waiting for {url}")
 
 
+
+def seed_pf(tok: str) -> dict:
+    """§15 seed — real workspace/products/knowledge/datasource in the
+    (possibly fresh) PF home so every downstream check hits real state."""
+    st, b = req(PFAPI, "/api/v1/workspaces", "POST",
+                {"name": "Forge E2E", "description": "e2e seed"},
+                token=tok)
+    assert st == 201, (st, b)
+    wid = b["data"]["id"]
+    ids = {"wid": wid}
+    for name in ("Payments API", "Customer Analytics"):
+        st, b = req(PFAPI, "/api/v1/products", "POST",
+                    {"workspace_id": wid, "name": name,
+                     "domain": "payments"}, token=tok)
+        assert st == 201, (st, b)
+        ids[name] = b["data"]["id"]
+    pid = ids["Payments API"]
+    ids["pid"] = pid
+    # knowledge doc citing "vault timeout"
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/documents", "POST",
+                {"content": "Incident report: the vault timeout was caused "
+                            "by an expired TLS cert on the payments edge. "
+                            "Mitigation: rotate cert, add alert."},
+                token=tok)
+    assert st in (200, 201), (st, b)
+    # sqlite source with api_errors(code,name,count)
+    db = Path(PF_HOME) / "e2e_seed.db"
+    import sqlite3
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE api_errors (code TEXT, name TEXT, count INT)")
+    con.executemany("INSERT INTO api_errors VALUES (?,?,?)",
+                    [("E42", "vault timeout", 17),
+                     ("E17", "rate limit", 9),
+                     ("E07", "auth fail", 4)])
+    con.commit(); con.close()
+    st, b = req(PFAPI, f"/api/v1/products/{pid}/data-sources", "POST",
+                {"product_id": pid, "name": "api_errors",
+                 "connector": "sqlite", "locator": str(db),
+                 "dialect": "sqlite", "read_only": True,
+                 "catalog_allowlist": ["api_errors"]}, token=tok)
+    assert st in (200, 201), (st, b)
+    ids["src"] = b["data"]["id"]
+    return ids
+
+
 def main() -> int:
+    rex = _needs_reexec()
+    if rex:
+        os.execv(rex, [rex, os.path.abspath(__file__), *sys.argv[1:]])
     failures: list[str] = []
 
     def check(name: str, cond: bool, detail: str = "") -> None:
@@ -171,6 +234,14 @@ def main() -> int:
     pair_token = (FAB_STATE / "boot.log").read_text().strip()
     log("boot", note="all up", pair_token_present=bool(pair_token))
 
+    pf_tok = json.loads(subprocess.check_output(
+        [str(PF_BIN), "api", "token", "--show"],
+        env={**os.environ, "PRODUCT_FORGE_HOME": PF_HOME}))["token"]
+    ids = seed_pf(pf_tok)
+    PID, WID, SRC = ids["pid"], ids["wid"], ids["src"]
+    log("seed", pid=PID, wid=WID, src=SRC)
+
+
     # ---------- 5.1 pairing --------------------------------------------------
     st, _ = req(BRIDGE, "/status")
     check("status-no-auth-401", st == 401, f"got {st}")
@@ -191,9 +262,9 @@ def main() -> int:
     check("providers-list", st == 200 and PROVIDER in provs, f"got {st}")
 
     st, s = req(BRIDGE, "/agent-sessions", "POST", {
-        "provider": PROVIDER, "product_id": "prd_017179b95798",
-        "workspace_id": "ws_c70c04c22546", "title": f"e2e-{PROVIDER}",
-        "context": {"product_id": "prd_017179b95798",
+        "provider": PROVIDER, "product_id": PID,
+        "workspace_id": WID, "title": f"e2e-{PROVIDER}",
+        "context": {"product_id": PID,
                     "allowed_knowledge_sources": ["api_errors.md"],
                     "allowed_tools": [],
                     "mcp_registry": ["product-forge"]}}, token=tok)
@@ -288,7 +359,7 @@ def main() -> int:
     # ---------- 5.4 context attach + revocation blocks ops ------------------
     st, b = req(BRIDGE, "/context/attach", "POST", {
         "session_id": sid,
-        "context": {"product_id": "prd_017179b95798",
+        "context": {"product_id": PID,
                     "allowed_knowledge_sources": ["api_errors.md"],
                     "allowed_tools": [],
                     "context_policy": "context_required"}}, token=tok)
@@ -311,9 +382,6 @@ def main() -> int:
     # ---------- PF side (real API) -------------------------------------------
     st, b = req(PFAPI, "/api/v1/health")
     check("pf-health", st == 200, f"got {st}")
-    pf_tok = json.loads(subprocess.check_output(
-        [str(PF_BIN), "api", "token", "--show"],
-        env={**os.environ, "PRODUCT_FORGE_HOME": PF_HOME}))["token"]
     st, b = req(PFAPI, "/api/v1/products", token=pf_tok)
     data = b.get("data", {})
     items = data.get("items", data) if isinstance(data, dict) else data
@@ -321,7 +389,7 @@ def main() -> int:
     check("pf-products", st == 200 and
           {"Payments API", "Customer Analytics"} <= names,
           f"got {st} names={names}")
-    st, b = req(PFAPI, "/api/v1/products/prd_017179b95798/knowledge/query",
+    st, b = req(PFAPI, f"/api/v1/products/{PID}/knowledge/query",
                 "POST", {"question": "vault timeout", "limit": 5}, token=pf_tok)
     cites = b.get("data", {}).get("citations", [])
     check("pf-knowledge-cited", st == 200 and bool(cites),
@@ -329,7 +397,7 @@ def main() -> int:
     log("pf-citation", chunk=(cites or [{}])[0].get("chunk_id"))
 
     # ---------- §12 Payments API flow: SQL, dashboard, report, decision -----
-    pid = "prd_017179b95798"
+    pid = PID
     st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/validate", "POST",
                 {"statement": "SELECT code, name, count FROM api_errors "
                               "ORDER BY count DESC", "dialect": "sqlite"},
@@ -339,7 +407,7 @@ def main() -> int:
     st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/execute", "POST",
                 {"statement": "SELECT code, name, count FROM api_errors "
                               "ORDER BY count DESC",
-                 "source_id": "src_24377b6de02c", "row_limit": 10},
+                 "source_id": SRC, "row_limit": 10},
                 token=pf_tok)
     run = b.get("data", {})
     check("pf-sql-execute", st == 200 and run.get("status") == "completed"
@@ -348,7 +416,7 @@ def main() -> int:
     log("pf-sql", sample=(run.get("result_preview") or [])[:1])
     st, b = req(PFAPI, f"/api/v1/products/{pid}/queries/execute", "POST",
                 {"statement": "DROP TABLE api_errors",
-                 "source_id": "src_24377b6de02c"}, token=pf_tok)
+                 "source_id": SRC}, token=pf_tok)
     wr = b.get("data", {})
     check("pf-sql-write-blocked",
           st != 200 or wr.get("status") in ("rejected", "failed"),
@@ -357,7 +425,7 @@ def main() -> int:
     st, b = req(PFAPI, f"/api/v1/products/{pid}/dashboards", "POST",
                 {"name": "e2e-error-rates",
                  "cards": [{"title": "error counts",
-                            "source_id": "src_24377b6de02c",
+                            "source_id": SRC,
                             "statement": "SELECT code, count FROM api_errors"}]},
                 token=pf_tok)
     did = b.get("data", {}).get("id") or b.get("data", {}).get("dashboard", {}).get("id")

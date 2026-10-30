@@ -155,3 +155,25 @@ def test_local_bridge_auth_and_supervisor(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         sup.terminate_all()
+
+
+def test_orchestrator_full_flow():
+    """§20 backend — session → prompt → drain → replay → close via orchestrator."""
+    from forge_agent_bridge.orchestrator import build_orchestrator
+    o = build_orchestrator("fake")
+    s = o.create_session(product_id="p1")
+    o.prompt(s.id, "what is E42?")
+    n = o.drain(s.id)
+    assert n >= 5
+    evs = o.replay(s.id)
+    types = [e["type"] for e in evs]
+    assert types[0] == "session.created" and "usage.updated" in types
+    assert o.replay(s.id, after_seq=3)[0]["seq"] > 3
+    o.close(s.id)
+    assert o.sessions[s.id]
+    from forge_agent_bridge.adapter import BridgeError
+    try:
+        o.prompt("nope", "x")
+        raise AssertionError("expected error")
+    except BridgeError as e:
+        assert e.code == "FAB-SESSION"

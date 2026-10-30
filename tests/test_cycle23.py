@@ -1,36 +1,6 @@
 """Cycle 23 — runners, budgets, collaboration enforcement, handoff."""
 
-import http.client
-import json
-import threading
-
-import pytest
-
-
-@pytest.fixture()
-def srv(tmp_path, monkeypatch):
-    from forge_agent_bridge import local_bridge
-    monkeypatch.setattr(local_bridge, "STATE_DIR", tmp_path / "fb")
-    monkeypatch.chdir(tmp_path)
-    tok = local_bridge.pair_token()
-    handler, sup = local_bridge.make_app()
-    from http.server import ThreadingHTTPServer
-    s = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=s.serve_forever, daemon=True).start()
-    yield s.server_address[1], tok
-    s.shutdown()
-    sup.terminate_all()
-
-
-def _req(port, tok, method, path, body=None, principal=None):
-    c = http.client.HTTPConnection("127.0.0.1", port)
-    h = {"Authorization": f"Bearer {tok}",
-         "Content-Type": "application/json"}
-    if principal:
-        h["X-FAB-Principal"] = principal
-    c.request(method, path, body=json.dumps(body or {}), headers=h)
-    r = c.getresponse()
-    return r.status, json.loads(r.read())
+from conftest import _req
 
 
 def _mk_session(port, tok, principal="local"):

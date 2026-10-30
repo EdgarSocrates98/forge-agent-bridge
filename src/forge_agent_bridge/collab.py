@@ -97,10 +97,12 @@ class CollabStore:
     def assert_can_act(self, sid: str, principal: str) -> None:
         """Observers are read-only — they cannot prompt/approve/delete."""
         rec = self.rec(sid)
-        if rec["visibility"] == "private":
-            return  # single-owner sessions: only the token holder acts anyway
         if principal == rec["owner"]:
             return
+        if rec["visibility"] == "private":
+            raise BridgeError(
+                "FAB-FORBIDDEN",
+                f"session {sid} is private to '{rec['owner']}'")
         if principal in rec["observers"]:
             raise BridgeError(
                 "FAB-FORBIDDEN",

@@ -18,6 +18,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .adapter import BridgeError
+
 STATE_DIR = Path.home() / ".forge-bridge"
 
 
@@ -131,17 +133,26 @@ def make_app() -> Any:
 
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n) or b"{}"
             try:
-                return json.loads(self.rfile.read(n) or b"{}")
+                data = json.loads(raw)
             except json.JSONDecodeError:
-                return {}
+                raise BridgeError("FAB-VALIDATION", "malformed JSON body") from None
+            if not isinstance(data, dict):
+                raise BridgeError("FAB-VALIDATION", "JSON body must be an object")
+            return data
 
         def _route(self) -> None:
             if not self._auth_ok():
                 return self._send(401, {"error": {"code": "FAB-UNAUTHORIZED",
                                                 "message": "bearer required"}})
             parts = [p for p in self.path.split("/") if p]
-            body = self._body() if self.command in ("POST", "PUT", "PATCH") else {}
+            try:
+                body = (self._body()
+                        if self.command in ("POST", "PUT", "PATCH") else {})
+            except BridgeError as e:
+                return self._send(422, {"error": {"code": e.code,
+                                                "message": str(e)}})
             if self.command == "GET" and parts == ["status"]:
                 return self._send(200, {"ok": True,
                                         "workspace_root": str(files.root),
@@ -149,7 +160,6 @@ def make_app() -> Any:
             if self.command == "POST" and parts and parts[0] == "files":
                 import base64
 
-                from .adapter import BridgeError
                 try:
                     act = parts[1] if len(parts) > 1 else ""
                     rel = str(body.get("path", "."))

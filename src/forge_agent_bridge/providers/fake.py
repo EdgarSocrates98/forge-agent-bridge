@@ -17,6 +17,7 @@ class FakeAdapter:
     # test stub: the fake provider has no binary; its
     # supervised process is a harmless sleeper (POSIX test surface)
     SPAWN_ARGV: ClassVar[list[str]] = ["sleep", "3600"]
+
     def __init__(self) -> None:
         self.sessions: dict[str, AgentSession] = {}
         self.prompts: dict[str, list[str]] = {}

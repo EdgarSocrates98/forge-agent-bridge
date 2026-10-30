@@ -15,7 +15,8 @@ from .contracts import utcnow
 from .local_bridge import state_dir
 
 FIELDS = {"title", "product_id", "workspace_id", "favorite", "archived",
-          "visibility", "notes", "provider"}
+          "visibility", "notes", "provider",
+          "context_version", "policy_version"}
 
 
 class SessionMetaStore:

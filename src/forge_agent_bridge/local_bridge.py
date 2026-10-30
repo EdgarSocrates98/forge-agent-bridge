@@ -113,6 +113,9 @@ def make_app() -> Any:
     pairing = Pairing(token)
     approvals = ApprovalStore()
     broker = Broker()
+    from .context import ContextStore, MCPFederation
+    ctxs = ContextStore()
+    mcp_fed = MCPFederation()
     rl_window: dict[str, deque[float]] = {}
     seen_nonces: dict[str, float] = {}
 
@@ -499,6 +502,60 @@ def make_app() -> Any:
                             {"error": {"code": e.code,
                                        "message": e.message}})
             # -- audit trail (§23.2) --------------------------------------------
+            # ---- Cycle 27: context federation + MCP registry ------------
+            if parts and parts[0] == "mcp":
+                if self.command == "GET" and len(parts) == 1:
+                    return self._send(200, {"items": mcp_fed.list()})
+                if self.command == "POST" and len(parts) == 1:
+                    from .context import MCPServerDescriptor
+                    d = MCPServerDescriptor.model_validate(body)
+                    audit.emit("mcp.register", auth.get("actor", "local"),
+                               server_id=d.server_id)
+                    return self._send(201, mcp_fed.register(d))
+                if len(parts) == 3 and parts[2] == "health" \
+                        and self.command == "POST":
+                    return self._send(200, mcp_fed.set_health(
+                        parts[1], str(body.get("health", "unverified"))))
+                return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
+                                                "message": "mcp route"}})
+            if parts and parts[0] == "context":
+                from .context import AgentContextDelta, ProductAgentSessionContext
+                if self.command == "POST" and parts == ["context", "draft"]:
+                    # §27.2 — minimal context package for a product binding
+                    ctx = ProductAgentSessionContext.model_validate({
+                        **(body or {}),
+                        "identity": auth.get("actor", "local")})
+                    return self._send(200, {
+                        "context": ctx.model_dump(mode="json", by_alias=True)})
+                if self.command == "POST" and parts == ["context", "attach"]:
+                    sid = str(body.get("session_id") or "")
+                    ctx = ProductAgentSessionContext.model_validate(
+                        body.get("context") or {})
+                    ctxs.bind(sid, ctx)
+                    meta.upsert(sid, context_version=ctx.context_version,
+                                policy_version=ctx.policy_version)
+                    audit.emit("context.attach", auth.get("actor", "local"),
+                               session=sid,
+                               context_version=ctx.context_version)
+                    return self._send(200, {"bound": True})
+                if (self.command == "POST" and len(parts) == 2
+                        and parts[1] == "delta"):
+                    d = AgentContextDelta.model_validate({
+                        **(body or {}),
+                        "reviewer": auth.get("actor", "local")})
+                    ctxs.record_delta(d)
+                    audit.emit("context.delta", auth.get("actor", "local"),
+                               session=d.session_id, review=d.review)
+                    return self._send(201, {"recorded": True,
+                                            "review": d.review})
+                if (self.command == "GET" and len(parts) == 2
+                        and parts[1] == "deltas"):
+                    qs = parse_qs(urlparse(self.path).query)
+                    return self._send(200, {"items": ctxs.deltas(
+                        product_id=(qs.get("product_id") or [None])[0],
+                        review=(qs.get("review") or [None])[0])})
+                return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
+                                                "message": "context route"}})
             if self.command == "GET" and parts == ["audit"]:
                 return self._send(200, {"items": audit.tail(
                     int(self.headers.get("X-Tail", "50")))})
@@ -542,12 +599,35 @@ def make_app() -> Any:
                     collab.share(s.id,
                                  owner=_principal(auth, s.id, self.headers),
                                  visibility=body.get("visibility", "private"))
+                    # §27.1 — bind forge/ProductAgentSessionContext/v1
+                    from .context import ProductAgentSessionContext
+                    sc = body.get("context") or {}
+                    sc_ctx = ProductAgentSessionContext.model_validate({
+                        **sc,
+                        "identity": _principal(auth, s.id, self.headers),
+                        "provider": provider,
+                        "product_id": sc.get("product_id") or s.product_id,
+                        "workspace_id": sc.get("workspace_id") or s.workspace_id,
+                    })
+                    ctxs.bind(s.id, sc_ctx)
+                    # §27.5 — requested MCP servers are filtered through the
+                    # federated registry + context allowlist (honest denial)
+                    req_mcp = body.get("mcp_servers") or []
+                    denied_mcp = [m for m in req_mcp
+                                  if not mcp_fed.allowed_for(sc_ctx, m)]
+                    meta.upsert(s.id, context_version=sc_ctx.context_version,
+                                policy_version=sc_ctx.policy_version)
                     audit.emit("session.create",
                                auth.get("actor", "local"),
                                session=s.id, provider=provider,
-                               runner=runner)
+                               runner=runner,
+                               context_version=sc_ctx.context_version)
                     out = s.model_dump(mode="json")
                     out["meta"] = meta.get(s.id)
+                    out["context"] = sc_ctx.model_dump(mode="json",
+                                                       by_alias=True)
+                    if denied_mcp:
+                        out["mcp_denied"] = denied_mcp
                     return self._send(201, out)
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
@@ -605,6 +685,7 @@ def make_app() -> Any:
                             workspace_id=str(
                                 meta.get(sid).get("workspace_id") or ""),
                             principal=principal, collab=collab)
+                        ctxs.assert_allowed(sid)  # §27.6 context gate
                         budgets.check(_scope_map(sid, provider, principal))
                         o.prompt(sid, text,
                                  attachments=body.get("attachments"))
@@ -674,6 +755,10 @@ def make_app() -> Any:
                         return self._handoff(sid, provider, o, principal, body)
                     if action == "artifacts" and self.command == "POST":
                         return self._send(200, {"items": o.artifacts(sid)})
+                    if action == "context" and self.command == "GET":
+                        collab.assert_can_read(sid, principal)
+                        return self._send(200, {
+                            "context": ctxs.get(sid)})
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
                     status = (403 if "FORBIDDEN" in code

@@ -36,7 +36,7 @@ jobs:
       - name: SBOM (CycloneDX)
         run: |
           pip install "cyclonedx-bom>=7,<8"
-          cyclonedx-py environment python --of JSON -o sbom.json
+          cyclonedx-py environment "$(command -v python3)" --of JSON -o sbom.json
           python -c "import json; json.load(open('sbom.json'))"
           ls -l sbom.json
       - uses: actions/upload-artifact@v4

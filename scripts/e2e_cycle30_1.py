@@ -31,23 +31,56 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-FORGES = Path("/home/edgar/Documentos/projetos/forjas")
-PF_REPO = FORGES / "product-forge"
-FAB_REPO = FORGES / "forge-agent-bridge"
-PORTAL_REPO = FORGES / "forge-portal"
-EVID = FAB_REPO / "docs" / "audits" / "evidence" / "e2e_cycle30_1"
+
+def _root() -> Path:
+    """Repo root discovery: --root/env FORGE_ROOT, else this repo's parent."""
+    if os.environ.get("FORGE_ROOT"):
+        return Path(os.environ["FORGE_ROOT"]).resolve()
+    return Path(__file__).resolve().parents[2]
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+import argparse
+
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--root")
+_ap.add_argument("--provider", default=os.environ.get("E2E_PROVIDER", "devin"))
+_ap.add_argument("--evidence")
+_ap.add_argument("--pf-home")
+_ap.add_argument("--fab-state")
+_a = _ap.parse_args()
+
+FORGES = Path(_a.root).resolve() if _a.root else _root()
+PF_REPO = Path(os.environ.get("PF_REPO", FORGES / "product-forge"))
+FAB_REPO = Path(os.environ.get("FAB_REPO", FORGES / "forge-agent-bridge"))
+PORTAL_REPO = Path(os.environ.get("PORTAL_REPO", FORGES / "forge-portal"))
+EVID = Path(_a.evidence) if _a.evidence else \
+    FAB_REPO / "docs" / "audits" / "evidence" / "e2e_cycle30_1"
 EVID.mkdir(parents=True, exist_ok=True)
 LOG = (EVID / "e2e_log.jsonl").open("w")
 
-PF_HOME = os.environ.get("PRODUCT_FORGE_HOME", "/tmp/pf_e2e")
-FAB_STATE = Path("/tmp/fab_e2e_state")
-PF_BIN = PF_REPO / ".venv" / "bin" / "productforge"
-FAB_PY = FAB_REPO / ".venv" / "bin" / "python"
+import tempfile
+
+PF_HOME = _a.pf_home or os.environ.get("PRODUCT_FORGE_HOME") or \
+    tempfile.mkdtemp(prefix="pf_e2e_")
+FAB_STATE = Path(_a.fab_state or tempfile.mkdtemp(prefix="fab_e2e_"))
+PF_BIN = Path(os.environ.get("PF_BIN", PF_REPO / ".venv" / "bin" / "productforge"))
+FAB_PY = Path(os.environ.get("FAB_PY", FAB_REPO / ".venv" / "bin" / "python"))
 PORTAL_DIST = PORTAL_REPO / "dist" / "forge-portal-app" / "browser"
 
-BRIDGE = "http://127.0.0.1:8471"
-PFAPI = "http://127.0.0.1:8470"
-PORTAL = "http://127.0.0.1:4200"
+P_PORT = int(os.environ.get("PORTAL_PORT", _free_port()))
+B_PORT = int(os.environ.get("BRIDGE_PORT", _free_port()))
+F_PORT = int(os.environ.get("PF_PORT", _free_port()))
+BRIDGE = f"http://127.0.0.1:{B_PORT}"
+PFAPI = f"http://127.0.0.1:{F_PORT}"
+PORTAL = f"http://127.0.0.1:{P_PORT}"
+PROVIDER = _a.provider
 
 PROCS: list[subprocess.Popen] = []
 
@@ -99,10 +132,11 @@ def main() -> int:
             failures.append(f"{name}: {detail}")
 
     # ---------- service boot -------------------------------------------------
-    log("boot", note="starting PF API :8470 + bridge :8471 + portal static :4200")
+    log("boot", note=f"PF API :{F_PORT} bridge :{B_PORT} portal :{P_PORT}")
     FAB_STATE.mkdir(parents=True, exist_ok=True)
     pf = subprocess.Popen(
-        [str(PF_BIN), "api", "serve", "--host", "127.0.0.1", "--port", "8470"],
+        [str(PF_BIN), "api", "serve", "--host", "127.0.0.1",
+         "--port", str(F_PORT)],
         env={**os.environ, "PRODUCT_FORGE_HOME": PF_HOME},
         stdout=open(EVID / "pf_api.log", "w"),  # noqa: SIM115 — held by Popen
         stderr=subprocess.STDOUT)
@@ -112,7 +146,7 @@ def main() -> int:
          ("import pathlib,sys;import forge_agent_bridge.local_bridge as lb;"
          "lb.STATE_DIR=pathlib.Path(sys.argv[1]);"
          "open(sys.argv[1]+'/boot.log','w').write(lb.pair_token());"
-         "lb.serve(8471)"), str(FAB_STATE)],
+         f"lb.serve({B_PORT})"), str(FAB_STATE)],
         env={**os.environ, "FAB_ALLOWED_ORIGINS": f"{PORTAL}"},
         stdout=open(EVID / "fab.log", "w"),  # noqa: SIM115 — held by Popen
         stderr=subprocess.STDOUT)
@@ -128,7 +162,7 @@ def main() -> int:
             pass
     os.chdir(PORTAL_DIST)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
-    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 4200), Quiet)
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", P_PORT), Quiet)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
     wait_http(BRIDGE + "/status")
@@ -154,16 +188,16 @@ def main() -> int:
     # ---------- 5.2+ real Devin session over bridge API ----------------------
     st, b = req(BRIDGE, "/providers", token=tok)
     provs = {p["id"]: p for p in b.get("items", [])}
-    check("providers-list", st == 200 and "devin" in provs, f"got {st}")
+    check("providers-list", st == 200 and PROVIDER in provs, f"got {st}")
 
     st, s = req(BRIDGE, "/agent-sessions", "POST", {
-        "provider": "devin", "product_id": "prd_017179b95798",
-        "workspace_id": "ws_c70c04c22546", "title": "e2e-devin",
+        "provider": PROVIDER, "product_id": "prd_017179b95798",
+        "workspace_id": "ws_c70c04c22546", "title": f"e2e-{PROVIDER}",
         "context": {"product_id": "prd_017179b95798",
                     "allowed_knowledge_sources": ["api_errors.md"],
                     "allowed_tools": [],
                     "mcp_registry": ["product-forge"]}}, token=tok)
-    check("devin-session-201", st == 201, f"got {st} {s}")
+    check(f"{PROVIDER}-session-201", st == 201, f"got {st} {s}")
     sid = s.get("id", "")
     acp_ref = s.get("provider_session_ref", "")
     log("session", sid=sid, acp_ref=acp_ref,
@@ -172,19 +206,19 @@ def main() -> int:
     st, b = req(BRIDGE, f"/agent-sessions/{sid}/prompt", "POST",
                 {"text": "Reply with exactly: FORGE-E2E-PING-9"},
                 token=tok, timeout=240)
-    check("devin-prompt-200", st == 200, f"got {st} {b}")
+    check(f"{PROVIDER}-prompt-200", st == 200, f"got {st} {b}")
     st, b = req(BRIDGE, f"/agent-sessions/{sid}/events", "POST",
                 {"after_seq": 0}, token=tok)
     evs = b.get("items", [])
     kinds = [e["type"] for e in evs]
     text = "".join(e["payload"].get("text", "")
                    for e in evs if e["type"] == "message.delta")
-    check("devin-streamed-answer", text == "FORGE-E2E-PING-9",
+    check(f"{PROVIDER}-streamed-answer", text == "FORGE-E2E-PING-9",
           f"text={text!r} kinds={kinds[-4:]}")
-    check("devin-usage-event", any(
+    check(f"{PROVIDER}-usage-event", any(
         e["type"] == "usage.updated" and e["payload"].get("total")
         for e in evs), f"kinds={kinds}")
-    check("devin-turn-complete", "turn.completed" in kinds, f"kinds={kinds}")
+    check(f"{PROVIDER}-turn-complete", "turn.completed" in kinds, f"kinds={kinds}")
     log("devin-events", count=len(evs), kinds=kinds[-6:],
         usage=[e["payload"] for e in evs if e["type"] == "usage.updated"])
 
@@ -203,10 +237,10 @@ def main() -> int:
     # refuses session/load while the session is open in another process,
     # so close it first (real provider semantics, evidence in log).
     st, b = req(BRIDGE, f"/agent-sessions/{sid}", "DELETE", token=tok)
-    check("devin-close-200", st == 200, f"got {st}")
+    check(f"{PROVIDER}-close-200", st == 200, f"got {st}")
     st, b = req(BRIDGE, "/agent-sessions/_/resume", "POST",
-                {"session_ref": acp_ref, "provider": "devin"}, token=tok)
-    check("devin-resume-201", st == 201, f"got {st} {b}")
+                {"session_ref": acp_ref, "provider": PROVIDER}, token=tok)
+    check(f"{PROVIDER}-resume-201", st == 201, f"got {st} {b}")
     log("resume", new_sid=b.get("id"), ref=acp_ref)
 
     # ---------- 5.3 approvals (files upload — real backend gate) -------------
@@ -375,7 +409,7 @@ def main() -> int:
                           full_page=True)
             body = pg.content()
             check("portal-sessions-visible",
-                  "e2e-devin" in body or "FORGE" in body or "devin" in body,
+                  f"e2e-{PROVIDER}" in body or "FORGE" in body or PROVIDER in body,
                   "session titles not found in DOM")
             pg.screenshot(path=str(shots / "02_sessions.png"),
                           full_page=True)

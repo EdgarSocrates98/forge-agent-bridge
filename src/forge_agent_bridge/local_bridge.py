@@ -328,6 +328,10 @@ def make_app() -> Any:
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
+            origin = self.headers.get("Origin")
+            if origin and self._origin_ok():
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
             self.end_headers()
             last = after_seq
             start = time.monotonic()
@@ -391,6 +395,7 @@ def make_app() -> Any:
                              "GET, POST, PATCH, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers",
                              "Authorization, Content-Type, "
+                             "Last-Event-ID, "
                              "X-FAB-Principal, X-FAB-Nonce")
             self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Vary", "Origin")

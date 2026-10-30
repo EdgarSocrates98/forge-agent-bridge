@@ -196,3 +196,30 @@ def test_pf_unverified_when_unconfigured(monkeypatch, srv):
     st, det = _req(port, tok, "GET", "/agent-sessions")
     item = next(i for i in det["items"] if i["id"] == s["id"])
     assert "unverified" in str(item.get("meta", {}).get("pf_verify", ""))
+
+
+def test_sse_cors_headers(srv):
+    """SSE endpoint must emit ACAO for allowed origins and preflight
+    must allow Last-Event-ID — both were missing (found via real
+    Chromium fetch in e2e/test_chat_streaming)."""
+    import http.client
+    from forge_agent_bridge import local_bridge
+    local_bridge._ALLOWED_ORIGINS.add("http://127.0.0.1:4200")
+    port, tok = srv
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("OPTIONS", "/agent-sessions/x/stream",
+              headers={"Origin": "http://127.0.0.1:4200",
+                       "Access-Control-Request-Headers": "last-event-id"})
+    r = c.getresponse(); r.read(); c.close()
+    assert "last-event-id" in \
+        r.getheader("Access-Control-Allow-Headers").lower()
+    _, s = _req(port, tok, "POST", "/agent-sessions", {"provider": "fake"})
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", f"/agent-sessions/{s['id']}/stream?after_seq=0",
+              headers={"Authorization": f"Bearer {tok}",
+                       "Origin": "http://127.0.0.1:4200"})
+    r = c.getresponse()
+    r.read(200)  # partial read is enough — headers are what we assert
+    c.close()
+    assert r.getheader("Access-Control-Allow-Origin") == \
+        "http://127.0.0.1:4200"

@@ -5,8 +5,8 @@ a capability is `verified` only after a live exercised flow with evidence.
 
 | Provider | Binary | Version (recorded) | Authenticated | Session | Streaming | Tool calls | Approvals | Resume | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| Claude Code | `~/.local/bin/claude` | `2.1.304` | unverified | unverified | unverified | unverified | unverified | unverified | **installed, unverified** |
-| Codex CLI | `~/.local/bin/codex` | `codex-cli 0.163.0` | unverified | unverified | unverified | unverified | unverified | unverified | **installed, unverified** |
+| Claude Code | `~/.local/bin/claude` | `2.1.304` | unavailable:auth | unverified | unverified | unverified | unverified | unverified | **installed, login required** |
+| Codex CLI | `~/.local/bin/codex` | `codex-cli 0.163.0` | unverified² | unavailable:mcp-config | unverified | unverified | unverified | unverified | **installed, broken MCP config** |
 | Devin CLI | `~/.local/bin/devin` | `3000.11.234 (92c83011d113)` | verified | verified | verified | unverified | unverified | verified¹ | **live-homologated (2026-10-30)** |
 | Copilot CLI | `copilot` | `1.0.105` | verified | verified | verified | unverified | unverified | verified | **live-homologated (2026-10-30)** |
 | Fake (test) | in-process | n/a | n/a | verified | verified | verified | verified | n/a | **test adapter — not a real provider** |
@@ -14,7 +14,18 @@ a capability is `verified` only after a live exercised flow with evidence.
 ¹ Resume exercised at raw ACP protocol level (`session/load` returned
 modes/configuration) and now implemented in `AcpAdapter.resume_session()`
 (2026-10-30); `send_prompt`/`stream_events` stream asynchronously and
-emit `turn_complete` with `stopReason` + `usage`.
+emit `turn_complete` with `stopReason` + `usage`. Live re-verified in
+`scripts/e2e_cycle30_1.py` runs — real streamed answer, usage events,
+`session/load` resume, SSE — evidence under
+`docs/audits/evidence/e2e_cycle30_1/`.
+
+² Codex `auth.json` exists but `codex exec` fails before the first turn:
+a configured MCP server (`token-optimizer`) aborts session init
+(`required MCP servers failed to initialize`), and several remote MCP
+entries lack OAuth tokens. Classified `unavailable:mcp-config`, not
+`unverified` — the attempt was exercised and produced a named failure.
+Claude Code `claude -p` returns `"Not logged in · Please run /login"`
+— `unavailable:auth`.
 
 ## Evidence (2026-10-30, real runs)
 

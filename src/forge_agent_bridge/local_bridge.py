@@ -47,17 +47,34 @@ def pair_token() -> str:
 
 
 class ProcessSupervisor:
-    """Tracks spawned agent processes; guarantees cleanup."""
+    """Tracks spawned agent processes; guarantees cleanup.
+
+    §28.4 platform lifecycle:
+    - POSIX: `start_new_session` → own process group → `killpg` SIGTERM,
+      SIGKILL fallback. Verified on Linux/macOS.
+    - Windows: no process groups — `CREATE_NEW_PROCESS_GROUP` +
+      `proc.terminate()` (WM_CLOSE/TerminateProcess), then taskkill /T /F
+      for the tree. Job Objects are the stronger seam (kill-on-close) but
+      require pywin32 — flagged unverified until exercised on Windows CI.
+    """
+
+    IS_WINDOWS = os.name == "nt"
 
     def __init__(self) -> None:
         self._procs: dict[str, subprocess.Popen[bytes]] = {}
         self._lock = threading.Lock()
 
     def spawn(self, sid: str, cmd: list[str], cwd: str = ".") -> subprocess.Popen[bytes]:
+        kwargs: dict[str, Any] = {}
+        if self.IS_WINDOWS:
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                | subprocess.CREATE_NO_WINDOW)       # type: ignore[attr-defined]
+        else:
+            kwargs["start_new_session"] = True      # own pgrp → clean kill
         proc = subprocess.Popen(
             cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True)  # own process group → clean kill
+            stderr=subprocess.PIPE, **kwargs)
         with self._lock:
             self._procs[sid] = proc
         return proc
@@ -67,6 +84,8 @@ class ProcessSupervisor:
             proc = self._procs.pop(sid, None)
         if not proc:
             return False
+        if self.IS_WINDOWS:
+            return self._terminate_windows(proc, timeout_s)
         with contextlib.suppress(ProcessLookupError, OSError):
             os.killpg(proc.pid, signal.SIGTERM)
         with contextlib.suppress(subprocess.TimeoutExpired):
@@ -74,6 +93,21 @@ class ProcessSupervisor:
         if proc.poll() is None:
             with contextlib.suppress(ProcessLookupError, OSError):
                 os.killpg(proc.pid, signal.SIGKILL)
+        return True
+
+    @staticmethod
+    def _terminate_windows(proc: subprocess.Popen[bytes],
+                           timeout_s: float) -> bool:
+        """Windows: graceful terminate → taskkill /T /F for the tree."""
+        with contextlib.suppress(OSError):
+            proc.terminate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=timeout_s)
+        if proc.poll() is None:
+            with contextlib.suppress(OSError):
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True, timeout=timeout_s, check=False)
         return True
 
     def terminate_all(self) -> None:
@@ -512,6 +546,87 @@ def make_app() -> Any:
                             {"error": {"code": e.code,
                                        "message": e.message}})
             # -- audit trail (§23.2) --------------------------------------------
+            # ---- Part IX: deterministic intelligence (read-only) --------
+            if parts and parts[0] == "intel":
+                from . import intelligence as intel
+                from .registry import REGISTRY
+                provs = [d.model_dump(mode="json")
+                         for d in REGISTRY.detect_all()]
+                if self.command == "POST" and parts == ["intel", "route"]:
+                    return self._send(200, intel.route_provider(
+                        provs,
+                        task_type=str(body.get("task_type", "chat")),
+                        required=body.get("required"),
+                        privacy=str(body.get("privacy", "local-ok")),
+                        prefer=body.get("prefer"),
+                        max_cost_usd=body.get("max_cost_usd")))
+                if len(parts) == 3 and self.command == "GET":
+                    sid, sub = parts[1], parts[2]
+                    collab.assert_can_read(
+                        sid, collab.principal(
+                            sid, self.headers.get("X-FAB-Principal")))
+                    evs = event_store.replay(sid)
+                    ctx = ctxs.get(sid)
+                    if sub == "quality":
+                        return self._send(200, intel.evaluate_session(evs))
+                    if sub == "context-health":
+                        return self._send(200, intel.context_health(ctx))
+                    if sub == "replay":
+                        return self._send(200, intel.replay_detail(evs, ctx))
+                    if sub == "decisions":
+                        pid = (ctx or {}).get("product_id") or ""
+                        return self._send(200, {"items": intel.decision_records(
+                            evs, sid, pid)})
+                if self.command == "GET" and parts == ["intel", "finops"]:
+                    return self._send(200, intel.finops_report(
+                        budgets.summary()))
+                if self.command == "GET" and parts == ["intel", "mode"]:
+                    return self._send(200, intel.degraded_mode(provs))
+                if self.command == "GET" and parts == ["intel", "workspace"]:
+                    return self._send(200, intel.workspace_summary(
+                        meta.list(include_archived=True),
+                        {s: c for s in meta.list(include_archived=True)
+                         if (c := ctxs.get(s))},
+                        mcp_fed.list(), budgets.limits()))
+                return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
+                                                "message": "intel route"}})
+            # ---- Cycle 28.6: backup/restore (no secrets) -----------------
+            if parts and parts[0] == "backup":
+                from .backup import create_backup, restore_backup
+                if self.command == "POST" and len(parts) == 1:
+                    m = create_backup(state_dir())
+                    audit.emit("backup.create", auth.get("actor", "local"),
+                               files=len(m["files"]),
+                               excluded=len(m["excluded"]))
+                    return self._send(201, {"backup": m["out"],
+                                            "files": len(m["files"]),
+                                            "excluded": m["excluded"]})
+                if (self.command == "POST" and len(parts) == 2
+                        and parts[1] == "restore"):
+                    src = Path(str(body.get("path", "")))
+                    if not src.is_file():
+                        return self._send(422, {"error": {
+                            "code": "FAB-VALIDATION",
+                            "message": "backup path required"}})
+                    actor = auth.get("actor", "local")
+                    args = {"path": str(src)}
+                    # one-time approval token: retry with it to execute
+                    if body.get("approval_token"):
+                        approvals.consume(
+                            str(body["approval_token"]),
+                            session_id="backup", resource=str(src),
+                            action="restore", args=args)
+                        audit.emit("backup.restore", actor, backup=str(src))
+                        return self._send(200, {
+                            "restore": restore_backup(src, state_dir())})
+                    req = approvals.request(
+                        session_id="backup", actor=actor,
+                        resource=str(src), action="restore", args=args,
+                        scope="workspace", risk="high")
+                    return self._send(200, {"restore": "approval-required",
+                                            "approval_request": req})
+                return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
+                                                "message": "backup route"}})
             # ---- Cycle 27: context federation + MCP registry ------------
             if parts and parts[0] == "mcp":
                 if self.command == "GET" and len(parts) == 1:

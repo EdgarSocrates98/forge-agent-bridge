@@ -1,14 +1,29 @@
-"""Event normalization (§5.4–5.5) — envelope, ordering, dedupe, replay."""
+"""Event normalization (§5.4–5.5) — envelope, ordering, dedupe, replay.
+
+Cycle 28 adds `DurableEventStore`: JSONL append per session so a bridge
+restart preserves history (§28.3): seq, event id, timestamp, session/turn/
+provider, redacted payload, replay cursor, retention.
+"""
 
 from __future__ import annotations
 
 import itertools
+import json
+import re
+from pathlib import Path
 from typing import Any
 
 from . import EVENT_SCHEMA
 from .contracts import EVENT_TYPES, new_id, utcnow
 
 _seq = itertools.count(1)
+
+
+def seq_floor(n: int) -> None:
+    """Restart-safe sequencing (§28.3): after loading persisted events the
+    counter resumes above the max persisted seq — never reissues a seq."""
+    global _seq
+    _seq = itertools.count(n + 1)
 
 
 def envelope(
@@ -71,6 +86,92 @@ class EventBuffer:
 
     def __len__(self) -> int:
         return len(self._events)
+
+
+# -- durable store (§28.3) ------------------------------------------------
+
+_SECRET_KEYS = re.compile(
+    r"(token|secret|password|api[_-]?key|authorization|credential)", re.IGNORECASE)
+_REDACTED = "[redacted]"
+
+
+def redact(obj: Any) -> Any:
+    """Recursively redact secret-looking keys before persistence."""
+    if isinstance(obj, dict):
+        return {k: (_REDACTED if _SECRET_KEYS.search(str(k)) else redact(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [redact(v) for v in obj]
+    return obj
+
+
+class DurableEventStore:
+    """Append-only JSONL per session under state_dir()/events/.
+
+    Semantics (§28.3): every event carries seq + event id + timestamp +
+    session/turn/provider + redacted payload. `replay(after_seq)` is the
+    cursor. Retention trims by max bytes AND max events; the oldest events
+    drop first but `session.created` is never silently dropped — a
+    `session.retention-trim` marker is written in its place.
+    """
+
+    def __init__(self, root: Path, *, max_events: int = 10_000,
+                 max_bytes: int = 64 * 1024 * 1024) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.max_events = max_events
+        self.max_bytes = max_bytes
+
+    def _file(self, session_id: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
+        return self.root / f"{safe}.jsonl"
+
+    def append(self, event: dict[str, Any]) -> None:
+        e = dict(event)
+        e["payload"] = redact(e.get("payload"))
+        if e.get("raw") is not None:
+            e["raw"] = redact(e["raw"])
+        with self._file(str(e["session_id"])).open("a") as f:
+            f.write(json.dumps(e, separators=(",", ":")) + "\n")
+        self._file(str(e["session_id"])).chmod(0o600)
+
+    def replay(self, session_id: str, after_seq: int = 0
+               ) -> list[dict[str, Any]]:
+        f = self._file(session_id)
+        if not f.exists():
+            return []
+        out: list[dict[str, Any]] = []
+        for line in f.read_text().splitlines():
+            if not line.strip():
+                continue
+            e = json.loads(line)
+            if e.get("seq", 0) > after_seq:
+                out.append(e)
+        out.sort(key=lambda e: e.get("seq", 0))
+        return out
+
+    def latest_seq(self, session_id: str) -> int:
+        evs = self.replay(session_id)
+        return max((e.get("seq", 0) for e in evs), default=0)
+
+    def enforce_retention(self, session_id: str) -> None:
+        f = self._file(session_id)
+        if not f.exists():
+            return
+        lines = f.read_text().splitlines()
+        while lines and (
+                len(lines) > self.max_events
+                or f.stat().st_size > self.max_bytes):
+            lines.pop(0)
+        if not lines:
+            return
+        marker = json.dumps({
+            "schema": EVENT_SCHEMA, "id": new_id("evt"), "ts": utcnow(),
+            "provider": "bridge", "session_id": session_id,
+            "turn_id": None, "seq": 0, "type": "session.retention-trim",
+            "payload": {"note": "oldest events trimmed by retention"}})
+        f.write_text(marker + "\n" + "\n".join(lines) + "\n")
+        f.chmod(0o600)
 
 
 # Minimal native→normalized mapping seeds. Providers extend per-adapter.

@@ -114,8 +114,18 @@ def make_app() -> Any:
     approvals = ApprovalStore()
     broker = Broker()
     from .context import ContextStore, MCPFederation
+    from .events import DurableEventStore, seq_floor
     ctxs = ContextStore()
     mcp_fed = MCPFederation()
+    event_store = DurableEventStore(state_dir() / "events")
+    # seq continuity across restarts — resume above max persisted seq
+    _max_seq = 0
+    for _f in event_store.root.glob("*.jsonl"):
+        with contextlib.suppress(Exception):
+            for _ln in _f.read_text().splitlines():
+                if _ln.strip():
+                    _max_seq = max(_max_seq, int(json.loads(_ln).get("seq", 0)))
+    seq_floor(_max_seq)
     rl_window: dict[str, deque[float]] = {}
     seen_nonces: dict[str, float] = {}
 
@@ -137,7 +147,7 @@ def make_app() -> Any:
     def _orch(provider: str) -> Any:
         from .orchestrator import build_orchestrator
         if provider not in orchs:
-            orchs[provider] = build_orchestrator(provider)
+            orchs[provider] = build_orchestrator(provider, store=event_store)
         return orchs[provider]
 
     def _session_provider(sid: str, fallback: str = "fake") -> str:
@@ -759,6 +769,26 @@ def make_app() -> Any:
                         collab.assert_can_read(sid, principal)
                         return self._send(200, {
                             "context": ctxs.get(sid)})
+                    if action == "recovery" and self.command == "GET":
+                        # §28.2 — forge/SessionRecoveryPlan/v1
+                        collab.assert_can_read(sid, principal)
+                        from .recovery import plan_for
+                        sess: dict[str, Any] = {"id": sid}
+                        for o2 in orchs.values():
+                            for sx in o2.list_sessions():
+                                if sx.id == sid:
+                                    sess = sx.model_dump(mode="json")
+                        prov = sess.get("provider") or provider
+                        caps = {c.name: c.state for c in
+                                _orch(str(prov)).adapter.detect().capabilities}
+                        m = meta.get(sid)
+                        n_ev = len(event_store.replay(sid))
+                        return self._send(200, {"recovery": plan_for(
+                            sess,
+                            provider_resumable=str(
+                                caps.get("session-resume", "")) == "supported",
+                            events_count=n_ev,
+                            context_version=m.get("context_version"))})
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
                     status = (403 if "FORBIDDEN" in code

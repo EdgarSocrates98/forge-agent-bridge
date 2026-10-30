@@ -106,4 +106,5 @@ EVENT_TYPES = {
     "artifact.created", "artifact.updated",
     "plan.updated", "usage.updated",
     "runtime.error", "runtime.unknown", "connection.disconnected",
+    "session.retention-trim",
 }

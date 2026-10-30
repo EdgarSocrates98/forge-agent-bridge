@@ -76,6 +76,13 @@ todos os providers (não exercitados live — fake adapter não conta).
 - Windows Job Objects: sem host Windows em CI.
 - `product_id` bind: validação server-side contra PF segue `unverified`
   (sem endpoint de lookup).
+- Diagnostic Center unificado (§11): checks reais existem distribuídos —
+  Control Center (sessões/approvals/providers/auth_state via API live),
+  Settings (teste de conexão PF), Health tab, Lens (context health,
+  provider routing, budgets). Uma página de diagnóstico consolidada
+  com ações corretivas por check não existe — cobertura parcial.
+- Compat checker de versões Claude/Codex/Devin (§11): não implementado;
+  versões testadas registradas na capability matrix, futuras = Unverified.
 - `test_perf_smoke` teve 1 flake em CI (`ConnectionResetError` em 1/20
   sessões concorrentes) — rerun verde, local estável; observar.
 

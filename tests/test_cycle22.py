@@ -35,9 +35,9 @@ def test_file_service_security_and_ops(tmp_path, monkeypatch):
     except BridgeError as e:
         assert e.code == "FAB-APPROVAL-REQUIRED"
     fs.upload("doc.md", b"v2", approved=True)
+    fs.upload("doc.md", b"v3", approved=True)
     hist = fs.history("doc.md")
     assert hist and hist[0]["version"]
-    fs.upload("doc.md", b"v3", approved=True)
     fs.restore("doc.md", hist[0]["version"], approved=True)
     assert (root / "doc.md").read_text() == "v2"
 

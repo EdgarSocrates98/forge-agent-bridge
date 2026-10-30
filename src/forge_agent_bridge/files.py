@@ -98,11 +98,15 @@ class FileService:
         return {"path": rel, "size": len(data), "saved": True}
 
     def _snapshot(self, p: Path) -> Path:
+        import itertools
+        if not hasattr(self, "_snap_seq"):
+            self._snap_seq = itertools.count(1)
         rel = p.relative_to(self.root)
         digest = hashlib.sha256(str(rel).encode()).hexdigest()[:16]
         vd = state_dir() / "versions" / digest
         vd.mkdir(parents=True, exist_ok=True)
-        dest = vd / f"{utcnow().replace(':', '-')}_{p.name}"
+        dest = vd / (f"{utcnow().replace(':', '-')}_"
+                     f"{next(self._snap_seq):04d}_{p.name}")
         shutil.copy2(p, dest)
         return dest
 

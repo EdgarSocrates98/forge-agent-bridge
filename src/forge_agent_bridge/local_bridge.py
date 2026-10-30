@@ -87,10 +87,26 @@ def make_app() -> Any:
     token = pair_token()
     supervisor = ProcessSupervisor()
     orchs: dict[str, Any] = {}  # provider → orchestrator
+    from .budgets import BudgetLedger
+    from .collab import AuditLog, CollabStore
     from .files import FileService
     from .metadata import SessionMetaStore
+    from .runners import RunnerRegistry
     meta = SessionMetaStore()
     files = FileService(Path.cwd())  # workspace root = bridge launch dir
+    runners = RunnerRegistry()
+    budgets = BudgetLedger()
+    collab = CollabStore()
+    audit = AuditLog()
+
+    def _principal(headers: Any, sid: str) -> str:
+        return collab.principal(sid, headers.get("X-FAB-Principal"))
+
+    def _scope_map(sid: str, provider: str, principal: str) -> dict[str, str]:
+        m = meta.get(sid)
+        return {"user": principal, "session": sid, "provider": provider,
+                "workspace": str(m.get("workspace_id") or ""),
+                "product": str(m.get("product_id") or "")}
 
     def _orch(provider: str) -> Any:
         from .orchestrator import build_orchestrator
@@ -168,6 +184,66 @@ def make_app() -> Any:
                 return self._send(200, {"items": [
                     d.model_dump(mode="json")
                     for d in REGISTRY.detect_all()]})
+            # -- runners (§23.1) ------------------------------------------------
+            if parts and parts[0] == "runners":
+                if self.command == "GET":
+                    return self._send(200, {"items": runners.list()})
+                if self.command == "POST" and len(parts) == 1:
+                    try:
+                        r = runners.register(
+                            str(body["id"]), str(body.get("kind", "remote")),
+                            endpoint=body.get("endpoint"),
+                            labels=body.get("labels"),
+                            quota_sessions=int(body.get("quota_sessions", 8)))
+                        audit.emit("runner.register",
+                                   self.headers.get("X-FAB-Principal", "local"),
+                                   runner=r["id"], kind=r["kind"])
+                        return self._send(201, r)
+                    except Exception as e:  # noqa: BLE001
+                        code = getattr(e, "code", "FAB-ERROR")
+                        return self._send(422, {"error": {"code": code,
+                                                        "message": str(e)}})
+                if len(parts) == 3 and parts[2] == "health" and self.command == "POST":
+                    try:
+                        return self._send(200, runners.health(parts[1]))
+                    except Exception as e:  # noqa: BLE001
+                        return self._send(404, {"error": {
+                            "code": getattr(e, "code", "FAB-ERROR"),
+                            "message": str(e)}})
+                if len(parts) == 3 and parts[2] == "deregister" \
+                        and self.command == "POST":
+                    try:
+                        ok = runners.deregister(parts[1])
+                    except Exception as e:  # noqa: BLE001
+                        return self._send(422, {"error": {
+                            "code": getattr(e, "code", "FAB-ERROR"),
+                            "message": str(e)}})
+                    audit.emit("runner.deregister",
+                               self.headers.get("X-FAB-Principal", "local"),
+                               runner=parts[1])
+                    return self._send(200 if ok else 404, {"drained": ok})
+            # -- budgets (§23.4) ------------------------------------------------
+            if parts and parts[0] == "budget":
+                if self.command == "GET":
+                    return self._send(200, budgets.summary())
+                if self.command == "POST" and len(parts) == 2 \
+                        and parts[1] == "limits":
+                    try:
+                        lim = budgets.set_limit(
+                            str(body["scope"]), str(body["key"]),
+                            str(body["window"]), int(body["tokens"]))
+                        audit.emit("budget.limit",
+                                   self.headers.get("X-FAB-Principal", "local"),
+                                   **lim)
+                        return self._send(201, lim)
+                    except Exception as e:  # noqa: BLE001
+                        code = getattr(e, "code", "FAB-ERROR")
+                        return self._send(422, {"error": {"code": code,
+                                                        "message": str(e)}})
+            # -- audit trail (§23.2) --------------------------------------------
+            if self.command == "GET" and parts == ["audit"]:
+                return self._send(200, {"items": audit.tail(
+                    int(self.headers.get("X-Tail", "50")))})
             if self.command == "POST" and parts == ["sessions"]:
                 from .contracts import new_id
                 sid = new_id("ses")
@@ -180,6 +256,10 @@ def make_app() -> Any:
             if self.command == "POST" and parts == ["agent-sessions"]:
                 provider = str(body.get("provider", "fake"))
                 try:
+                    runner = body.get("runner") or "local"
+                    local_load = sum(
+                        len(o.sessions) for o in orchs.values())
+                    runners.place(runner, local_load=local_load)
                     s = _orch(provider).create_session(
                         product_id=body.get("product_id"),
                         workspace_id=body.get("workspace_id"),
@@ -188,6 +268,14 @@ def make_app() -> Any:
                                 product_id=s.product_id,
                                 workspace_id=s.workspace_id,
                                 title=body.get("title") or "")
+                    collab.share(s.id,
+                                 owner=self.headers.get("X-FAB-Principal",
+                                                        "local"),
+                                 visibility=body.get("visibility", "private"))
+                    audit.emit("session.create",
+                               self.headers.get("X-FAB-Principal", "local"),
+                               session=s.id, provider=provider,
+                               runner=runner)
                     out = s.model_dump(mode="json")
                     out["meta"] = meta.get(s.id)
                     return self._send(201, out)
@@ -232,15 +320,31 @@ def make_app() -> Any:
                 provider = body.get("provider") or _session_provider(sid)
                 try:
                     o = _orch(provider)
+                    principal = _principal(self.headers, sid)
                     if action == "prompt" and self.command == "POST":
                         text = str(body.get("text", ""))
                         if not text:
                             return self._send(422, {"error": {"code": "FAB-VALIDATION",
                                                             "message": "text required"}})
+                        collab.assert_can_act(sid, principal)
+                        budgets.check(_scope_map(sid, provider, principal))
                         o.prompt(sid, text,
                                  attachments=body.get("attachments"))
-                        o.drain(sid)
-                        return self._send(200, {"accepted": True})
+                        n = o.drain(sid)
+                        # record real token usage from usage.updated events
+                        evs = o.replay(sid)
+                        tin = sum(int(e["payload"].get("tokens_in") or 0)
+                                  for e in evs if e["type"] == "usage.updated")
+                        tout = sum(int(e["payload"].get("tokens_out") or 0)
+                                   for e in evs if e["type"] == "usage.updated")
+                        if tin or tout:
+                            budgets.record(
+                                _scope_map(sid, provider, principal),
+                                tin, tout,
+                                estimated=not any(
+                                    e["type"] == "usage.updated" for e in evs))
+                        return self._send(200, {"accepted": True,
+                                                "events_drained": n})
                     if action == "events" and self.command == "POST":
                         after = int(body.get("after_seq", 0))
                         return self._send(200, {"items": o.replay(sid, after)})
@@ -256,15 +360,40 @@ def make_app() -> Any:
                         meta.upsert(s.id, provider=provider)
                         return self._send(201, s.model_dump(mode="json"))
                     if action == "approve" and self.command == "POST":
+                        collab.assert_can_approve(sid, principal)
                         o.approve(sid, str(body.get("approval_id", "")),
                                   bool(body.get("approved")))
+                        audit.emit("session.approve", principal,
+                                   session=sid,
+                                   approval_id=body.get("approval_id"),
+                                   approved=bool(body.get("approved")))
                         return self._send(200, {"resolved": True})
+                    if action == "share" and self.command == "POST":
+                        collab.assert_can_act(sid, principal)
+                        rec = collab.share(
+                            sid, owner=principal,
+                            visibility=str(body.get("visibility", "private")),
+                            observers=body.get("observers"),
+                            delegated_to=body.get("delegated_to"))
+                        audit.emit("session.share", principal, session=sid,
+                                   visibility=rec["visibility"])
+                        return self._send(200, {"collab": rec})
+                    if action == "comment" and self.command == "POST":
+                        rec = collab.comment(
+                            sid, principal, str(body.get("text", "")))
+                        return self._send(200, {"comments": rec["comments"]})
+                    if action == "handoff" and self.command == "POST":
+                        return self._handoff(sid, provider, o, principal, body)
                     if action == "artifacts" and self.command == "POST":
                         return self._send(200, {"items": o.artifacts(sid)})
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
                     code = getattr(e, "code", "FAB-ERROR")
-                    return self._send(502, {"error": {"code": code,
-                                                    "message": str(e)}})
+                    status = (403 if "FORBIDDEN" in code
+                              else 429 if "BUDGET" in code
+                              else 404 if "NOT-FOUND" in code
+                              else 502)
+                    return self._send(status, {"error": {"code": code,
+                                                       "message": str(e)}})
             if len(parts) == 2 and parts[0] == "sessions" and self.command == "DELETE":
                 ok = supervisor.terminate(parts[1])
                 return self._send(200 if ok else 404, {"terminated": ok})
@@ -275,6 +404,57 @@ def make_app() -> Any:
         do_POST = _route
         do_PATCH = _route
         do_DELETE = _route
+
+        def _handoff(self, sid: str, provider: str, o: Any,
+                     principal: str, body: dict[str, Any]) -> None:
+            """§23.3 — session handoff. Modes:
+            provider-resume   — real native resume via provider_session_ref
+            context-rebuild   — new session + last events as context
+                                (labeled 'reconstructed', never identical)
+            remote            — requires a verified remote runner."""
+            mode = str(body.get("mode", "context-rebuild"))
+            audit.emit("session.handoff", principal, session=sid, mode=mode)
+            if mode == "remote":
+                try:
+                    runners.place(str(body.get("runner_id", "")))
+                except Exception as e:  # noqa: BLE001
+                    return self._send(422, {"error": {
+                        "code": getattr(e, "code", "FAB-UNAVAILABLE"),
+                        "message": str(e)}})
+                return self._send(200, {"handoff": "remote",
+                                        "state": "accepted"})
+            if mode == "provider-resume":
+                s = o.sessions.get(sid)
+                ref = s.provider_session_ref if s else None
+                if not ref:
+                    return self._send(422, {"error": {
+                        "code": "FAB-UNSUPPORTED",
+                        "message": "provider reports no resumable ref"}})
+                ns = o.resume(ref)
+                meta.upsert(ns.id, provider=provider)
+                return self._send(201, {"handoff": "provider-resume",
+                                        "session": ns.model_dump(mode="json")})
+            # context-rebuild: honest reconstruction — new session seeded
+            # with the last N events as context; labeled, never identical.
+            history = [
+                e for e in o.replay(sid)
+                if e["type"] in ("message.completed", "turn.started")
+            ][-20:]
+            ns = o.create_session(
+                product_id=meta.get(sid).get("product_id"),
+                workspace_id=meta.get(sid).get("workspace_id"))
+            meta.upsert(ns.id, provider=provider,
+                        title=f"[rebuilt] {meta.get(sid).get('title', sid)}")
+            context = "\n".join(
+                f"{e['type']}: {e['payload'].get('text', '')[:400]}"
+                for e in history)
+            if context:
+                o.prompt(ns.id, f"[context-rebuild from {sid}]\n{context}")
+                o.drain(ns.id)
+            return self._send(201, {"handoff": "context-rebuild",
+                                    "continuity": "reconstructed",
+                                    "session": ns.model_dump(mode="json"),
+                                    "events_replayed": len(history)})
 
         def log_message(self, *a: Any) -> None:  # quiet — logs via file
             pass

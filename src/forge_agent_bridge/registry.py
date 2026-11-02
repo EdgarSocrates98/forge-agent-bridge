@@ -149,18 +149,35 @@ class ProviderRegistry:
         return None
 
     def detect_all(self) -> list[ProviderDescriptor]:
-        """Installed-CLI detection via PATH — honest `unverified` auth."""
+        """Detect binaries and ask installed providers for auth/version state.
+
+        A binary on PATH is not treated as logged in.  Where the provider
+        exposes an official local status command, use it; failures remain
+        ``unverified`` rather than becoming a false positive.
+        """
         out: list[ProviderDescriptor] = []
         for pid, meta in CATALOG.items():
             exe = meta["executable"]
             installed = shutil.which(exe) if exe else None
+            auth_state = AuthState.AUTHENTICATED if meta["kind"] == "fake" else AuthState.UNAUTHENTICATED
+            version = None
+            if installed:
+                auth_state = AuthState.UNVERIFIED
+                try:
+                    adapter = self._resolve(pid)
+                    if adapter:
+                        raw_auth = str(adapter.get_auth_status() or "unverified")
+                        auth_state = AuthState(raw_auth)
+                        version = adapter.get_version()
+                except Exception:  # noqa: BLE001 - provider probing is best effort
+                    auth_state = AuthState.UNVERIFIED
             out.append(ProviderDescriptor(
                 id=pid, name=meta["name"], kind=meta["kind"],
                 executable=installed,
+                version=version,
                 capabilities=[ProviderCapability(name=n, state=s)
                               for n, s in meta["capabilities"]],
-                auth_state=(AuthState.UNVERIFIED if installed
-                            else AuthState.UNAUTHENTICATED),
+                auth_state=auth_state,
                 matrix_version=MATRIX_VERSION,
             ))
         return out

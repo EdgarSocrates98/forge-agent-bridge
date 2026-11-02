@@ -1106,7 +1106,11 @@ def make_app() -> Any:
                 return self._send(201, {"session_id": sid,
                                         "provider": provider})
             if self.command == "POST" and parts == ["agent-sessions"]:
-                provider = str(body.get("provider", "fake"))
+                provider = str(body.get("provider", "")).strip()
+                if not provider:
+                    return self._send(422, {"error": {
+                        "code": "FAB-PROVIDER-REQUIRED",
+                        "message": "provider is required; choose a detected provider or explicit fake test double"}})
                 try:
                     runner = body.get("runner") or "local"
                     local_load = sum(

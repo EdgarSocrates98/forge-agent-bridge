@@ -85,10 +85,27 @@ class AcpAdapter:
             return None
 
     def get_auth_status(self) -> str:
-        # Honest: presence of the binary does not prove auth.
+        # ACP inherits the user's environment and HOME, so Devin's CLI/Desktop
+        # credential store is intentionally reused.  Presence of the binary
+        # alone is not enough; ask the provider's own auth command when it has
+        # one and keep the conservative state on unexpected output.
         from ..contracts import AuthState
-        return (AuthState.UNVERIFIED
-                if shutil.which(self.cmd[0]) else AuthState.UNAUTHENTICATED).value
+        if not shutil.which(self.cmd[0]):
+            return AuthState.UNAUTHENTICATED.value
+        if self.provider_id == "devin":
+            import subprocess
+            try:
+                result = subprocess.run([self.cmd[0], "auth", "status"],
+                                        check=False, capture_output=True,
+                                        text=True, timeout=10)
+                output = f"{result.stdout}\n{result.stderr}".lower()
+                if result.returncode == 0 and "logged in" in output:
+                    return AuthState.AUTHENTICATED.value
+                if "not logged" in output or "login" in output:
+                    return AuthState.UNAUTHENTICATED.value
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        return AuthState.UNVERIFIED.value
 
     def initialize(self) -> None:
         if not shutil.which(self.cmd[0]):

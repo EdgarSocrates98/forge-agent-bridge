@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+from pathlib import Path
 
 import typer
 
@@ -64,11 +66,55 @@ def doctor() -> None:
     _emit(out)
 
 
+@app.command("claude-auth")
+def claude_auth(
+    mode: str = typer.Option("subscription", help="subscription or bedrock"),
+) -> None:
+    """Choose Claude authentication on first use; install never prompts."""
+    if mode not in {"subscription", "bedrock"}:
+        raise typer.BadParameter("choose subscription or bedrock")
+    path = Path.home() / ".forge-bridge" / "provider-config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = {"claude": {"auth_mode": mode}}
+    path.write_text(json.dumps(cfg, indent=2) + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    if mode == "subscription":
+        result = subprocess.run(["claude", "auth", "login"], check=False)
+        if result.returncode:
+            raise typer.Exit(result.returncode)
+        _emit({"provider": "claude-code", "auth_mode": mode, "status": "login_completed"})
+        return
+    aws = subprocess.run(["aws", "sts", "get-caller-identity", "--output", "json"],
+                         check=False, capture_output=True, text=True)
+    if aws.returncode:
+        _emit({"provider": "claude-code", "auth_mode": mode,
+               "status": "aws_credentials_unverified",
+               "next_action": "configure AWS credentials with Bedrock access"})
+        raise typer.Exit(1)
+    _emit({"provider": "claude-code", "auth_mode": mode, "status": "aws_identity_verified"})
+
+
 @app.command()
 def sessions() -> None:
     """List registered adapter sessions (registry-populated only)."""
     _emit({"registered_adapters": [k for k in REGISTRY._adapters] or [],
            "note": "sessions are bridge-process scoped"})
+
+
+@app.command()
+def serve(port: int = typer.Option(8471, min=1, max=65535,
+                                   help="Loopback HTTP port.")) -> None:
+    """Run the local Agent Bridge service on loopback.
+
+    Product Forge uses this command when the user explicitly opens its portal;
+    installation itself never starts a provider runtime or asks for credentials.
+    """
+    from .local_bridge import serve as serve_bridge
+
+    serve_bridge(port=port)
 
 
 @app.command(name="pair")

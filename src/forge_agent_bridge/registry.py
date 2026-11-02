@@ -78,6 +78,17 @@ CATALOG: dict[str, dict[str, Any]] = {
             subagents="UNVERIFIED", plans="UNVERIFIED",
             usage="SUPPORTED", cloud_handoff="UNVERIFIED"),
     },
+    "github-copilot": {
+        "name": "GitHub Copilot CLI",
+        "executable": "copilot",
+        "kind": "cli-jsonl",
+        "capabilities": _caps(
+            chat="SUPPORTED", streaming="UNVERIFIED", session_resume="UNVERIFIED",
+            cancel="SUPPORTED", tool_calling="SUPPORTED", mcp="SUPPORTED",
+            files="SUPPORTED", approvals="SUPPORTED", images="UNVERIFIED",
+            models="SUPPORTED", subagents="UNVERIFIED", plans="UNVERIFIED",
+            usage="UNVERIFIED", cloud_handoff="UNSUPPORTED"),
+    },
     "fake": {
         "name": "Fake Provider (tests)",
         "executable": None,
@@ -129,6 +140,9 @@ class ProviderRegistry:
         if provider_id == "codex":
             from .providers.codex import codex_adapter
             return codex_adapter()
+        if provider_id == "github-copilot":
+            from .providers.copilot import copilot_adapter
+            return copilot_adapter()
         if provider_id == "fake":
             from .providers.fake import FakeAdapter
             return FakeAdapter()

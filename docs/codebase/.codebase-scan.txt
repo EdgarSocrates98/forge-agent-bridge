@@ -1,0 +1,267 @@
+
+=== DIRECTORY TREE (max depth 3, source files only) ===
+.github
+.github/workflows
+.github/workflows/ci.yml
+.gitignore
+.pytest_cache
+.pytest_cache/.gitignore
+.pytest_cache/CACHEDIR.TAG
+.pytest_cache/README.md
+.pytest_cache/v
+.pytest_cache/v/cache
+.pytest_cache/v/cache/lastfailed
+.pytest_cache/v/cache/nodeids
+.ruff_cache
+.ruff_cache/.gitignore
+.ruff_cache/0.17.3
+.ruff_cache/0.17.3/11368368375462396149
+.ruff_cache/0.17.3/12779334087942557801
+.ruff_cache/0.17.3/3017511644424544195
+.ruff_cache/CACHEDIR.TAG
+README.md
+docs
+docs/API.md
+docs/CAPABILITY_MATRIX.md
+docs/DEVIN_INTEGRATION.md
+docs/HOMOLOGATION.md
+docs/PROGRAM_STATUS.md
+docs/PROVIDERS.md
+docs/SECURITY.md
+docs/THREAT_MODEL.md
+docs/adr
+docs/adr/ADR-001-repo-and-architecture.md
+docs/audits
+docs/audits/CROSS_REPO_COMPATIBILITY.md
+docs/audits/CYCLE30_1_BASELINE.md
+docs/audits/CYCLE30_1_FINAL_HOMOLOGATION.md
+docs/audits/CYCLE30_1_LIVE_HOMOLOGATION_20261030.md
+docs/audits/CYCLE30_2_BASELINE.md
+docs/audits/CYCLE30_2_FINAL_HOMOLOGATION.md
+docs/audits/PROVIDER_GAP_MATRIX.md
+docs/audits/TRUST_BOUNDARY_MATRIX.md
+docs/audits/evidence
+docs/audits/evidence/bedrock_20261030T094324.log
+docs/audits/evidence/copilot_20261030T093705.jsonl
+docs/audits/evidence/copilot_session_47153602
+docs/audits/evidence/devin_acp_20261030T093504.jsonl
+docs/audits/evidence/e2e_cycle30_1
+docs/audits/evidence/pf_verify
+docs/codebase
+docs/codebase/.codebase-scan.txt
+docs/providers
+docs/providers/LIVE_CAPABILITY_MATRIX.md
+docs/providers/evidence
+docs/providers/evidence/codex
+e2e
+e2e/test.txt
+forge.json
+graphify-out
+graphify-out/.graphify_labels.json
+graphify-out/.graphify_labels.json.sig
+graphify-out/.graphify_root
+graphify-out/2026-10-30
+graphify-out/2026-10-30/.graphify_labels.json
+graphify-out/2026-10-30/GRAPH_REPORT.md
+graphify-out/2026-10-30/graph.json
+graphify-out/2026-10-30/manifest.json
+graphify-out/GRAPH_REPORT.md
+graphify-out/cache
+graphify-out/cache/ast
+graphify-out/cache/ast/v0.9.48-s2
+graphify-out/cache/stat-index.json
+graphify-out/graph.html
+graphify-out/graph.json
+graphify-out/manifest.json
+install.ps1
+install.sh
+install.windows.sh
+pyproject.toml
+scripts
+scripts/compat_check.py
+scripts/e2e_cycle30_1.py
+scripts/forge_bootstrap.py
+scripts/release_gate.sh
+src
+src/forge_agent_bridge
+src/forge_agent_bridge/__init__.py
+src/forge_agent_bridge/acp.py
+src/forge_agent_bridge/adapter.py
+src/forge_agent_bridge/approvals.py
+src/forge_agent_bridge/backup.py
+src/forge_agent_bridge/broker.py
+src/forge_agent_bridge/budgets.py
+src/forge_agent_bridge/cli.py
+src/forge_agent_bridge/collab.py
+src/forge_agent_bridge/context.py
+src/forge_agent_bridge/contracts.py
+src/forge_agent_bridge/events.py
+src/forge_agent_bridge/files.py
+src/forge_agent_bridge/install
+src/forge_agent_bridge/install/__init__.py
+src/forge_agent_bridge/install/cli.py
+src/forge_agent_bridge/install/lifecycle.py
+src/forge_agent_bridge/integrity.py
+src/forge_agent_bridge/intelligence.py
+src/forge_agent_bridge/local_bridge.py
+src/forge_agent_bridge/metadata.py
+src/forge_agent_bridge/orchestrator.py
+src/forge_agent_bridge/pairing.py
+src/forge_agent_bridge/pf_context.py
+src/forge_agent_bridge/providers
+src/forge_agent_bridge/providers/__init__.py
+src/forge_agent_bridge/providers/acp_adapter.py
+src/forge_agent_bridge/providers/claude.py
+src/forge_agent_bridge/providers/codex.py
+src/forge_agent_bridge/providers/fake.py
+src/forge_agent_bridge/recovery.py
+src/forge_agent_bridge/registry.py
+src/forge_agent_bridge/runners.py
+src/forge_agent_bridge/secrets.py
+src/forge_agent_bridge/ssrf.py
+src/forge_agent_bridge/{providers}
+tests
+tests/conftest.py
+tests/fake_acp_server.py
+tests/test_bridge.py
+tests/test_cycle21.py
+tests/test_cycle22.py
+tests/test_cycle23.py
+tests/test_cycle24.py
+tests/test_cycle25.py
+tests/test_cycle26.py
+tests/test_cycle27.py
+tests/test_cycle28.py
+tests/test_cycle29.py
+tests/test_cycle30.py
+tests/test_cycle30_1.py
+tests/test_cycle30_2.py
+tests/test_install.py
+tests/test_perf_smoke.py
+
+=== STACK DETECTION (manifest files) ===
+
+--- pyproject.toml ---
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge-agent-bridge"
+version = "0.1.0"
+description = "Forge Agent Bridge — universal agent session/event/approval contracts and provider adapters (Claude Code, Codex, Devin)"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6", "typer>=0.12"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+forge-bridge = "forge_agent_bridge.cli:main"
+
+[tool.hatch.version]
+path = "src/forge_agent_bridge/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forge_agent_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+
+=== ENTRY POINTS ===
+No common entry points found. Check 'main' or 'scripts.start' in manifest files above.
+
+=== LINTING AND FORMATTING CONFIG ===
+No linting or formatting config files found in project root.
+
+=== ENVIRONMENT VARIABLE TEMPLATES ===
+No .env.example or .env.template found. Identify required environment variables by searching the code and config for environment variable reads.
+
+=== TODO / FIXME / HACK (production code only, test dirs excluded) ===
+None found.
+
+=== GIT RECENT COMMITS (last 20) ===
+e061b3a docs: CYCLE30_2 final homologation addendum (§30.2 closeout)
+0370a0e feat: portable e2e harness — dynamic repos/ports/seeded PF state (§30.2)
+5274b7e feat: unified diagnostics + MCP doctor endpoints (§30.2)
+c6eb469 fix(cors): SSE ACAO + Last-Event-ID preflight; portable e2e harness
+fb7ac27 feat(context): ProductAgentSessionContext/v2 + PF re-verification
+be0858e docs: Cycle 30.2 audit set — baseline, provider gap, trust, compat, final
+d42d7ee fix(codex): trusted workdir spawn + resume principal share (live-homologated)
+724e7e3 docs: honest §11 gaps — diagnostic coverage partial, no compat checker
+361fb61 docs: cycle 30.1 final homologation — all CIs green, e2e verified
+14175d4 e2e: §12 Payments API flow — SQL, dashboard, report, decision, audit
+88a3f1c e2e: fix three bugs — QueryIn field, /pf/chat route, SPA fallback
+0d78407 cycle30.1: real ACP streaming + session/load resume + e2e driver
+f6e7cec ci: fix SBOM step — cyclonedx-py env needs python3 path on runner
+f7f87c7 devin integration doc: acp agent-types evidence + portal path + unverified status
+fe230e6 cycle30.1: audit docs (baseline + live capability matrix + final homologation report), pairing persistence decision documented, lint fix
+b8543a8 cycle30.1: security hardening — atomic approval consumption (lock), actor binding on consume, restricted-tool deny-by-default, context revocation endpoint, full-origin policy (scheme+host+port+FAB_ALLOWED_ORIGINS), session integrity checker, new audit event types, SBOM CI fix (cyclonedx-py v7 flags)
+67a33c1 feat(bridge): install parity with product-forge
+b979201 test(bridge): perf smoke at 1/5/20 sessions + 5k-event replay
+0671167 test(bridge): Cycle 30 contract suite + release gate
+60e8d04 feat(bridge): Part IX intelligence + Cycle 28.6 backup endpoints
+
+=== HIGH-CHURN FILES (last 90 days, top 20) ===
+  17 src/forge_agent_bridge/local_bridge.py
+   6 tests/test_bridge.py
+   5 scripts/e2e_cycle30_1.py
+   5 src/forge_agent_bridge/contracts.py
+   4 docs/audits/evidence/e2e_cycle30_1/e2e_log.jsonl
+   4 docs/audits/evidence/e2e_cycle30_1/shots/01_chat_sessions.png
+   4 docs/audits/evidence/e2e_cycle30_1/shots/02_sessions.png
+   4 tests/test_cycle30_2.py
+   4 src/forge_agent_bridge/providers/codex.py
+   4 src/forge_agent_bridge/events.py
+   4 src/forge_agent_bridge/registry.py
+   4 .github/workflows/ci.yml
+   4 src/forge_agent_bridge/orchestrator.py
+   3 src/forge_agent_bridge/context.py
+   3 src/forge_agent_bridge/metadata.py
+   3 docs/audits/CYCLE30_1_FINAL_HOMOLOGATION.md
+   3 docs/providers/LIVE_CAPABILITY_MATRIX.md
+   3 src/forge_agent_bridge/acp.py
+   3 src/forge_agent_bridge/providers/acp_adapter.py
+   3 src/forge_agent_bridge/providers/fake.py
+
+=== MONOREPO SIGNALS ===
+No monorepo signals detected.
+
+=== CODE METRICS ===
+Total files scanned: 260
+Total lines of code: 70433
+
+Files by language:
+  Other: 207
+  Python: 53
+
+Top 10 largest files:
+docs/audits/evidence/devin_acp_20261030T093504.jsonl: 2169.2KB
+graphify-out/graph.json: 962.6KB
+graphify-out/2026-10-30/graph.json: 959.0KB
+graphify-out/graph.html: 833.0KB
+graphify-out/cache/ast/v0.9.48-s2/8b8f5af4b2242d8311d909f2f7ed46bc87827e29abad2757045168b21a0b3d97.json: 139.4KB
+docs/audits/evidence/e2e_cycle30_1/shots/02_sessions.png: 116.5KB
+docs/audits/evidence/e2e_cycle30_1/shots/01_chat_sessions.png: 116.5KB
+docs/audits/evidence/copilot_session_47153602/events.jsonl: 93.8KB
+src/forge_agent_bridge/local_bridge.py: 67.8KB
+graphify-out/cache/ast/v0.9.48-s2/da5228ccc6189d9d84dbf5e277a67ac1c73e132a90c33ebcc49f8d11d92c27f8.json: 54.1KB
+
+=== CI/CD PIPELINES ===
+CI/CD: GitHub Actions
+
+=== CONTAINERS & ORCHESTRATION ===
+No containerization configs detected.
+
+=== SECURITY & COMPLIANCE ===
+No security configs detected.
+
+=== PERFORMANCE & TESTING ===
+No performance testing configs detected.
+
+=== SCAN COMPLETE ===

@@ -669,9 +669,48 @@ def make_app() -> Any:
                                                  "message": e.message}})
             if self.command == "GET" and parts == ["providers"]:
                 from .registry import REGISTRY
-                return self._send(200, {"items": [
-                    d.model_dump(mode="json")
-                    for d in REGISTRY.detect_all()]})
+                items = []
+                for d in REGISTRY.detect_all():
+                    item = d.model_dump(mode="json")
+                    if d.id == "claude-code":
+                        from .providers.claude import ClaudeAdapter
+                        item["auth_mode"] = ClaudeAdapter.auth_mode()
+                        item["auth_options"] = [
+                            {"id": "subscription", "label": "Claude subscription / login"},
+                            {"id": "bedrock", "label": "Amazon Bedrock / AWS"},
+                        ]
+                        item["first_use_action"] = "forge-bridge claude-auth --mode <subscription|bedrock>"
+                    items.append(item)
+                return self._send(200, {"items": items})
+            if self.command == "POST" and parts == ["providers", "claude-code", "auth"]:
+                mode = str(body.get("mode", ""))
+                if body.get("confirm") != "start":
+                    return self._send(409, {"error": {"code": "FAB-CONFIRM",
+                                                       "message": "confirm=start is required"}})
+                if mode not in {"subscription", "bedrock"}:
+                    return self._send(422, {"error": {"code": "FAB-VALIDATION",
+                                                       "message": "mode must be subscription or bedrock"}})
+                cfg_path = STATE_DIR / "provider-config.json"
+                cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                cfg_path.write_text(json.dumps({"claude": {"auth_mode": mode}}) + "\n")
+                try:
+                    cfg_path.chmod(0o600)
+                except OSError:
+                    pass
+                if mode == "subscription":
+                    proc = subprocess.Popen(["claude", "auth", "login"],
+                                            stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                            start_new_session=True)
+                    return self._send(202, {"provider": "claude-code", "auth_mode": mode,
+                                            "status": "login_started", "pid": proc.pid})
+                aws = subprocess.run(["aws", "sts", "get-caller-identity", "--output", "json"],
+                                     check=False, capture_output=True, text=True)
+                return self._send(200 if aws.returncode == 0 else 422,
+                                  {"provider": "claude-code", "auth_mode": mode,
+                                   "status": "aws_identity_verified" if aws.returncode == 0
+                                   else "aws_credentials_unverified"})
             # -- §30.2 unified Diagnostic Center -------------------------------
             if self.command == "GET" and parts == ["diagnostics"]:
                 from .registry import REGISTRY

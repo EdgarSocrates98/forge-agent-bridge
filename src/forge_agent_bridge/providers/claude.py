@@ -10,11 +10,13 @@ thread and mapped to bridge-native event dicts.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, ClassVar
 
 from ..adapter import (
@@ -73,6 +75,18 @@ class ClaudeAdapter:
         self._sessions: dict[str, AgentSession] = {}
         self._pending_approvals: dict[str, str] = {}  # approval_id → session_id
 
+    @staticmethod
+    def auth_mode() -> str:
+        """Return the explicit first-party or Bedrock mode selected by user."""
+        mode = os.environ.get("FORGE_CLAUDE_AUTH_MODE", "").lower()
+        if not mode:
+            try:
+                cfg = json.loads((Path.home() / ".forge-bridge" / "provider-config.json").read_text())
+                mode = str(cfg.get("claude", {}).get("auth_mode", "subscription")).lower()
+            except (OSError, json.JSONDecodeError):
+                mode = "subscription"
+        return mode if mode in {"subscription", "bedrock"} else "subscription"
+
     def _reader(self, proc: subprocess.Popen[bytes],
                 q: queue.Queue[dict[str, Any]]) -> None:
         assert proc.stdout
@@ -101,8 +115,34 @@ class ClaudeAdapter:
 
     def get_auth_status(self) -> str:
         from ..contracts import AuthState
-        return (AuthState.UNVERIFIED
-                if shutil.which(self.EXE) else AuthState.UNAUTHENTICATED).value
+        if not shutil.which(self.EXE):
+            return AuthState.UNAUTHENTICATED.value
+        if self.auth_mode() == "bedrock":
+            # Bedrock uses the AWS credential chain rather than Claude OAuth.
+            # Presence alone is not enough; verify the caller when AWS CLI is
+            # available and otherwise remain honest/unverified.
+            if shutil.which("aws"):
+                try:
+                    check = subprocess.run(
+                        ["aws", "sts", "get-caller-identity", "--output", "json"],
+                        check=False, capture_output=True, text=True, timeout=10)
+                    if check.returncode == 0 and check.stdout.strip():
+                        return AuthState.AUTHENTICATED.value
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            return AuthState.UNVERIFIED.value
+        try:
+            check = subprocess.run([self.EXE, "auth", "status", "--json"],
+                                   check=False, capture_output=True, text=True,
+                                   timeout=10)
+            state = json.loads(check.stdout or "{}")
+            if state.get("loggedIn") is True:
+                return AuthState.AUTHENTICATED.value
+            if state.get("authMethod") == "none":
+                return AuthState.UNAUTHENTICATED.value
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            pass
+        return AuthState.UNVERIFIED.value
 
     def initialize(self) -> None:
         if not shutil.which(self.EXE):
@@ -125,9 +165,12 @@ class ClaudeAdapter:
         else:
             cmd += ["--session-id", session_uuid]
         try:
+            env = os.environ.copy()
+            if self.auth_mode() == "bedrock":
+                env["CLAUDE_CODE_USE_BEDROCK"] = "1"
             return subprocess.Popen(
                 cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, start_new_session=True)
+                stderr=subprocess.DEVNULL, start_new_session=True, env=env)
         except FileNotFoundError as exc:
             raise ProviderUnavailableError("claude not on PATH",
                                            provider="claude-code") from exc

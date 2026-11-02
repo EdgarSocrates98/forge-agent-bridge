@@ -145,7 +145,7 @@ def make_app() -> Any:
     supervisor = ProcessSupervisor()
     orchs: dict[str, Any] = {}  # provider → orchestrator
     from .approvals import ApprovalStore
-    from .broker import Broker
+    from .broker import Broker, require_scope
     from .budgets import BudgetLedger
     from .collab import AuditLog, CollabStore
     from .files import FileService
@@ -583,6 +583,31 @@ def make_app() -> Any:
             if auth is None:
                 return self._send(401, {"error": {"code": "FAB-UNAUTHORIZED",
                                                 "message": "bearer required"}})
+            try:
+                required = "agent:read"
+                if parts and parts[0] == "agent-sessions":
+                    required = "session:read" if self.command == "GET" else "session:manage"
+                elif parts and parts[0] == "providers":
+                    required = "provider:read"
+                elif parts and parts[0] == "approvals":
+                    required = "approval:resolve" if len(parts) > 1 else "approval:read"
+                elif parts and parts[0] == "files":
+                    required = "files:write" if len(parts) > 1 and parts[1] in {"upload", "restore"} else "files:read"
+                elif parts and parts[0] == "pair":
+                    required = "device:read" if self.command == "GET" else "device:manage"
+                elif parts and parts[0] == "runners":
+                    required = "runner:read" if self.command == "GET" else "runner:manage"
+                elif parts and parts[0] == "budget":
+                    required = "budget:read" if self.command == "GET" else "budget:manage"
+                elif parts and parts[0] == "mcp":
+                    required = "mcp:read" if self.command == "GET" else "mcp:manage"
+                elif parts and parts[0] == "context":
+                    required = "context:read" if self.command == "GET" else "context:manage"
+                elif parts and parts[0] == "backup":
+                    required = "admin"
+                require_scope(auth, required)
+            except BridgeError as e:
+                return self._send(403, {"error": {"code": e.code, "message": e.message}})
             body: dict[str, Any] = {}
             if self.command in ("POST", "PATCH"):
                 try:
@@ -835,6 +860,15 @@ def make_app() -> Any:
                 if self.command == "POST" and parts == ["pair", "rotate"]:
                     try:
                         out = pairing.rotate(str(body.get("pair_token", "")))
+                        # Keep the on-disk source used by Product Forge
+                        # bootstrap in sync with the canonical pairing state.
+                        token_path = state_dir() / "pair.token"
+                        tmp = token_path.with_suffix(".tmp")
+                        tmp.write_text(str(out["pair_token"]), encoding="utf-8")
+                        os.chmod(tmp, 0o600)
+                        os.replace(tmp, token_path)
+                        out["token_preview"] = __import__("hashlib").sha256(
+                            str(out["pair_token"]).encode()).hexdigest()[:12]
                         return self._send(200, out)
                     except BridgeError as e:
                         return self._send(

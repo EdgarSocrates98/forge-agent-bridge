@@ -24,6 +24,25 @@ RISK = {"file-write": "high", "process-spawn": "high",
         "share": "medium", "approve": "medium", "handoff": "high"}
 
 
+def require_scope(actor: dict[str, Any], required: str) -> None:
+    """Enforce route permissions; a conversational device is not admin."""
+    scopes = {str(s) for s in (actor.get("scopes") or [])}
+    if actor.get("kind") == "master" or "admin" in scopes or required in scopes:
+        return
+    grants = {
+        "agent:read": {"agent", "agent:read", "session:read", "provider:read"},
+        "agent:execute": {"agent", "agent:execute", "session:manage"},
+        "session:read": {"agent", "agent:read", "session:read"},
+        "session:manage": {"agent", "agent:execute", "session:manage"},
+        "provider:read": {"agent", "agent:read", "provider:read"},
+        "approval:read": {"agent", "agent:read", "approval:read"},
+        "approval:resolve": {"agent", "agent:execute", "approval:resolve"},
+        "files:read": {"agent", "agent:read", "files:read"},
+    }
+    if not scopes.intersection(grants.get(required, set())):
+        raise BridgeError("FAB-FORBIDDEN", f"scope required: {required}")
+
+
 class Decision(dict):
     """Authorization decision record — auditable."""
 

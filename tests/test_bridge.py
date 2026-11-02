@@ -18,6 +18,32 @@ def test_provider_detection_honest():
     assert real.auth_state.value in ("unverified", "unauthenticated")
 
 
+def test_pairing_revocation_survives_restart(tmp_path):
+    from forge_agent_bridge.pairing import Pairing
+
+    path = tmp_path / "pairing.json"
+    first = Pairing("master", path)
+    exchanged = first.exchange("master", "browser")
+    device_id = exchanged["device"]["device_id"]
+    assert first.principal(exchanged["session_token"])
+    assert first.revoke_device(device_id)
+
+    second = Pairing("master", path)
+    assert second.principal(exchanged["session_token"]) is None
+    assert path.stat().st_mode & 0o077 == 0
+
+
+def test_pairing_rotation_survives_restart(tmp_path):
+    from forge_agent_bridge.pairing import Pairing
+
+    path = tmp_path / "pairing.json"
+    first = Pairing("master", path)
+    rotated = first.rotate("master")["pair_token"]
+    second = Pairing("master", path)
+    assert second.verify(rotated)
+    assert not second.verify("master")
+
+
 def test_github_copilot_is_catalogued_when_installed(monkeypatch):
     from forge_agent_bridge.registry import REGISTRY
 

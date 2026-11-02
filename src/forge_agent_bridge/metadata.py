@@ -8,6 +8,8 @@ product association, favorite/archive flags, visibility, notes.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -23,17 +25,22 @@ FIELDS = {"title", "product_id", "workspace_id", "favorite", "archived",
 class SessionMetaStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (state_dir() / "sessions.json")
+        self._lock = threading.RLock()
 
     def _load(self) -> dict[str, Any]:
-        try:
-            return json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {}
+        with self._lock:
+            try:
+                return json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
 
     def _save(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=1))
-        self.path.chmod(0o600)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
 
     def get(self, session_id: str) -> dict[str, Any]:
         return dict(self._load().get(session_id) or {})

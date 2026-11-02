@@ -33,7 +33,7 @@ class BudgetLedger:
         try:
             return json.loads(self.path.read_text())
         except (OSError, json.JSONDecodeError):
-            return {"limits": {}, "usage": {}}
+            return {"limits": {}, "usage": {}, "entries": {}}
 
     def _save(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,9 +58,13 @@ class BudgetLedger:
     # -- usage ---------------------------------------------------------------
 
     def record(self, scope_map: dict[str, str], tokens_in: int,
-               tokens_out: int, *, estimated: bool = False) -> None:
+               tokens_out: int, *, estimated: bool = False,
+               idempotency_key: str | None = None) -> bool:
         """scope_map: {user:.., workspace:.., product:.., provider:.., session:..}."""
         data = self._load()
+        entries = data.setdefault("entries", {})
+        if idempotency_key and idempotency_key in entries:
+            return False
         for scope, key in scope_map.items():
             if not key:
                 continue
@@ -73,7 +77,11 @@ class BudgetLedger:
                 u["n"] += 1
                 u["estimated"] = u["estimated"] or estimated
                 u["updated_at"] = utcnow()
+        if idempotency_key:
+            entries[idempotency_key] = {"in": tokens_in, "out": tokens_out,
+                                        "estimated": estimated, "at": utcnow()}
         self._save(data)
+        return True
 
     def check(self, scope_map: dict[str, str]) -> None:
         """Raise FAB-BUDGET when any configured limit is already exceeded."""

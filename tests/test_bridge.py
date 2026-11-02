@@ -11,11 +11,34 @@ def _fake():
 def test_provider_detection_honest():
     from forge_agent_bridge.registry import REGISTRY
     ds = REGISTRY.detect_all()
-    assert len(ds) == 4  # claude, codex, devin, fake
+    assert len(ds) == 5  # claude, codex, devin, copilot, fake
     fake = next(d for d in ds if d.id == "fake")
     assert fake.capabilities and all(c.state.value for c in fake.capabilities)
     real = next(d for d in ds if d.id == "claude-code")
     assert real.auth_state.value in ("unverified", "unauthenticated")
+
+
+def test_github_copilot_is_catalogued_when_installed(monkeypatch):
+    from forge_agent_bridge.registry import REGISTRY
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/copilot" if name == "copilot" else None)
+    desc = next(d for d in REGISTRY.detect_all() if d.id == "github-copilot")
+    assert desc.executable == "/usr/bin/copilot"
+    assert desc.auth_state.value == "unverified"
+    assert {c.name for c in desc.capabilities} >= {"chat", "mcp", "approvals"}
+
+
+def test_devin_auth_status_uses_cli_credential_store(monkeypatch):
+    from forge_agent_bridge.providers.acp_adapter import AcpAdapter
+
+    class Result:
+        returncode = 0
+        stdout = "Logged in (via Devin)"
+        stderr = ""
+
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/devin")
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: Result())
+    assert AcpAdapter("devin", ["devin", "acp"]).get_auth_status() == "authenticated"
 
 
 def test_session_lifecycle_and_events():

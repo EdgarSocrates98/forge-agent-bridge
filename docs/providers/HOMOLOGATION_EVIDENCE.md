@@ -30,3 +30,22 @@ copilot -p 'Reply exactly READY' --silent --allow-all-tools
 claude auth status --json
 ```
 
+## Automated matrix
+
+The redacted harness is now available at `scripts/provider_harness.py` and is
+also scheduled nightly in `.github/workflows/provider-homologation.yml`.
+It exercises the adapter lifecycle (version/auth/session/prompt/events),
+writes only event types and a prompt hash, and exits non-zero when a provider
+is blocked or does not produce events:
+
+```bash
+uv run python scripts/provider_harness.py --real \
+  --output artifacts/provider-matrix.json
+```
+
+The local run on 2026-11-02 recorded Devin and Copilot as passed, Claude as
+blocked by missing credentials, and Codex as unavailable/timeout under the
+current CLI environment. The earlier direct Codex adapter smoke remains the
+passing evidence above; the harness intentionally does not convert a timeout
+into a pass.
+

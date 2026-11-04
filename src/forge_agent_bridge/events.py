@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +18,20 @@ from . import EVENT_SCHEMA
 from .contracts import EVENT_TYPES, new_id, utcnow
 
 _seq = itertools.count(1)
+_seq_lock = threading.Lock()
 
 
 def seq_floor(n: int) -> None:
     """Restart-safe sequencing (§28.3): after loading persisted events the
     counter resumes above the max persisted seq — never reissues a seq."""
     global _seq
-    _seq = itertools.count(n + 1)
+    with _seq_lock:
+        _seq = itertools.count(n + 1)
+
+
+def _next_seq() -> int:
+    with _seq_lock:
+        return next(_seq)
 
 
 def envelope(
@@ -48,7 +56,7 @@ def envelope(
         "provider_version": provider_version,
         "session_id": session_id,
         "turn_id": turn_id,
-        "seq": next(_seq),
+        "seq": _next_seq(),
         "type": event_type,
         "known_type": known,
         "payload": payload,
@@ -67,31 +75,37 @@ class EventBuffer:
         self.max_size = max_size
         self._events: list[dict[str, Any]] = []
         self._seen: set[str] = set()
+        self._lock = threading.RLock()
 
     def push(self, event: dict[str, Any]) -> bool:
         """True if stored; dedupes on event id, keeps sequence order."""
-        eid = event.get("id")
-        if eid in self._seen:
-            return False
-        self._seen.add(eid)
-        self._events.append(event)
-        self._events.sort(key=lambda e: e.get("seq", 0))
-        if len(self._events) > self.max_size:
-            dropped = self._events.pop(0)
-            self._seen.discard(dropped.get("id"))
-        return True
+        with self._lock:
+            eid = event.get("id")
+            if eid in self._seen:
+                return False
+            self._seen.add(eid)
+            self._events.append(event)
+            self._events.sort(key=lambda e: e.get("seq", 0))
+            if len(self._events) > self.max_size:
+                dropped = self._events.pop(0)
+                self._seen.discard(dropped.get("id"))
+            return True
 
     def replay(self, after_seq: int = 0) -> list[dict[str, Any]]:
-        return [e for e in self._events if e.get("seq", 0) > after_seq]
+        with self._lock:
+            return [e for e in self._events if e.get("seq", 0) > after_seq]
 
     def __len__(self) -> int:
-        return len(self._events)
+        with self._lock:
+            return len(self._events)
 
 
 # -- durable store (§28.3) ------------------------------------------------
 
 _SECRET_KEYS = re.compile(
-    r"(token|secret|password|api[_-]?key|authorization|credential)", re.IGNORECASE)
+    r"(?:^|[_-])(token|secret|password|api[_-]?key|authorization|credential)(?:$|[_-])",
+    re.IGNORECASE,
+)
 _REDACTED = "[redacted]"
 
 
@@ -121,57 +135,69 @@ class DurableEventStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_events = max_events
         self.max_bytes = max_bytes
+        self._lock = threading.RLock()
 
     def _file(self, session_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
         return self.root / f"{safe}.jsonl"
 
     def append(self, event: dict[str, Any]) -> None:
-        e = dict(event)
-        e["payload"] = redact(e.get("payload"))
-        if e.get("raw") is not None:
-            e["raw"] = redact(e["raw"])
-        with self._file(str(e["session_id"])).open("a") as f:
-            f.write(json.dumps(e, separators=(",", ":")) + "\n")
-        self._file(str(e["session_id"])).chmod(0o600)
+        with self._lock:
+            e = dict(event)
+            e["payload"] = redact(e.get("payload"))
+            if e.get("raw") is not None:
+                e["raw"] = redact(e["raw"])
+            path = self._file(str(e["session_id"]))
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
 
     def replay(self, session_id: str, after_seq: int = 0
                ) -> list[dict[str, Any]]:
-        f = self._file(session_id)
-        if not f.exists():
-            return []
-        out: list[dict[str, Any]] = []
-        for line in f.read_text().splitlines():
-            if not line.strip():
-                continue
-            e = json.loads(line)
-            if e.get("seq", 0) > after_seq:
-                out.append(e)
-        out.sort(key=lambda e: e.get("seq", 0))
-        return out
+        with self._lock:
+            f = self._file(session_id)
+            if not f.exists():
+                return []
+            out: list[dict[str, Any]] = []
+            for line in f.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                e = json.loads(line)
+                if e.get("seq", 0) > after_seq:
+                    out.append(e)
+            out.sort(key=lambda e: e.get("seq", 0))
+            return out
 
     def latest_seq(self, session_id: str) -> int:
         evs = self.replay(session_id)
         return max((e.get("seq", 0) for e in evs), default=0)
 
     def enforce_retention(self, session_id: str) -> None:
-        f = self._file(session_id)
-        if not f.exists():
-            return
-        lines = f.read_text().splitlines()
-        while lines and (
-                len(lines) > self.max_events
-                or f.stat().st_size > self.max_bytes):
-            lines.pop(0)
-        if not lines:
-            return
-        marker = json.dumps({
-            "schema": EVENT_SCHEMA, "id": new_id("evt"), "ts": utcnow(),
-            "provider": "bridge", "session_id": session_id,
-            "turn_id": None, "seq": 0, "type": "session.retention-trim",
-            "payload": {"note": "oldest events trimmed by retention"}})
-        f.write_text(marker + "\n" + "\n".join(lines) + "\n")
-        f.chmod(0o600)
+        with self._lock:
+            f = self._file(session_id)
+            if not f.exists():
+                return
+            lines = f.read_text(encoding="utf-8").splitlines()
+            while lines and (
+                    len(lines) > self.max_events
+                    or sum(len(line.encode("utf-8")) + 1 for line in lines)
+                    > self.max_bytes):
+                lines.pop(0)
+            if not lines:
+                return
+            marker = json.dumps({
+                "schema": EVENT_SCHEMA, "id": new_id("evt"), "ts": utcnow(),
+                "provider": "bridge", "session_id": session_id,
+                "turn_id": None, "seq": 0, "type": "session.retention-trim",
+                "payload": {"note": "oldest events trimmed by retention"}})
+            f.write_text(marker + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
+            try:
+                f.chmod(0o600)
+            except OSError:
+                pass
 
 
 # Minimal native→normalized mapping seeds. Providers extend per-adapter.

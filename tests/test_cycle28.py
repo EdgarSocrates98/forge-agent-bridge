@@ -36,6 +36,9 @@ def test_redaction_before_persist(srv) -> None:
     assert out["nested"]["pair_token"] == "[redacted]"
     assert out["list"][0]["secret"] == "[redacted]"
     assert out["keep"] == "ok"
+    assert redact({"tokens_in": 10, "tokens_out": 20}) == {
+        "tokens_in": 10, "tokens_out": 20
+    }
 
 
 def test_durable_replay_cursor(srv) -> None:
@@ -115,3 +118,25 @@ def test_seq_continuity_after_reinit(srv) -> None:
     seq_floor(top)
     e = envelope("message.delta", "fake", sid, {"text": "n"})
     assert e["seq"] > top
+
+
+def test_concurrent_durable_appends_are_not_lost(tmp_path) -> None:
+    import threading
+
+    from forge_agent_bridge.events import DurableEventStore, envelope
+
+    st = DurableEventStore(tmp_path / "ev")
+    barrier = threading.Barrier(12)
+
+    def append_one(i: int) -> None:
+        barrier.wait()
+        st.append(envelope("message.delta", "fake", "s", {"i": i}))
+
+    threads = [threading.Thread(target=append_one, args=(i,)) for i in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    events = st.replay("s")
+    assert len(events) == 12
+    assert len({event["seq"] for event in events}) == 12

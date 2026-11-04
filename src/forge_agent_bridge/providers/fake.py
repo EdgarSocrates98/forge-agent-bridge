@@ -63,15 +63,21 @@ class FakeAdapter:
         self.prompts.setdefault(session_id, []).append(prompt)
 
     def stream_events(self, session_id: str) -> Iterator[dict[str, Any]]:
-        """Native (pre-normalization) event stream for the last prompt."""
+        """Native (pre-normalization) event stream for the latest prompt.
+
+        A drain consumes one provider turn. Replaying every historical prompt
+        here made the Bridge persist old turns again with fresh event ids.
+        """
         yield {"type": "session/new", "params": {"session_id": session_id}}
-        for prompt in self.prompts.get(session_id, []):
-            yield {"type": "prompt", "params": {"text": prompt}}
-            yield {"type": "content_delta", "params": {"text": f"echo:{prompt}"}}
-            yield {"type": "tool_call", "params": {"name": "noop"}}
-            yield {"type": "tool_result", "params": {"name": "noop", "ok": True}}
-            yield {"type": "content", "params": {"text": f"done:{prompt}"}}
-            yield {"type": "usage", "params": {"tokens_in": 10, "tokens_out": 20}}
+        prompts = self.prompts.get(session_id, [])
+        if not prompts:
+            return
+        prompt = prompts[-1]
+        yield {"type": "content_delta", "params": {"text": f"echo:{prompt}"}}
+        yield {"type": "tool_call", "params": {"name": "noop"}}
+        yield {"type": "tool_result", "params": {"name": "noop", "ok": True}}
+        yield {"type": "content", "params": {"text": f"done:{prompt}"}}
+        yield {"type": "usage", "params": {"tokens_in": 10, "tokens_out": 20}}
 
     def respond_to_approval(self, approval_id: str, approved: bool) -> None:
         self.approvals[approval_id] = approved

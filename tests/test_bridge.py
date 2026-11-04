@@ -233,6 +233,22 @@ def test_orchestrator_full_flow():
         assert e.code == "FAB-SESSION"
 
 
+def test_repeated_prompt_does_not_replay_prior_turn():
+    from forge_agent_bridge.orchestrator import build_orchestrator
+
+    o = build_orchestrator("fake")
+    s = o.create_session()
+    o.prompt(s.id, "one")
+    o.drain(s.id)
+    o.prompt(s.id, "two")
+    o.drain(s.id)
+    events = o.replay(s.id)
+    payload_text = [e.get("payload", {}).get("text") for e in events]
+    assert payload_text.count("done:one") == 1
+    assert payload_text.count("done:two") == 1
+    assert [e["seq"] for e in events] == sorted(e["seq"] for e in events)
+
+
 def test_local_bridge_agent_session_http(tmp_path, monkeypatch):
     """Cycle 20 wire — create session → prompt → events over HTTP."""
     import http.client

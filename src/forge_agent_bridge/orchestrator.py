@@ -9,6 +9,7 @@ survives a bridge restart; the in-memory buffer remains the hot path.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from .adapter import BridgeError, ProviderAdapter
@@ -23,6 +24,7 @@ class BridgeOrchestrator:
         self.sessions: dict[str, AgentSession] = {}
         self.buffers: dict[str, EventBuffer] = {}
         self.store = store
+        self._push_lock = threading.RLock()
 
     def create_session(self, **kw: Any) -> AgentSession:
         s = self.adapter.create_session(**kw)
@@ -49,10 +51,12 @@ class BridgeOrchestrator:
         return n
 
     def replay(self, session_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+        if self.store:
+            events = self.store.replay(session_id, after_seq)
+            if events or session_id not in self.buffers:
+                return events
         if session_id in self.buffers:
             return self.buffers[session_id].replay(after_seq)
-        if self.store and self.store.replay(session_id):
-            return self.store.replay(session_id, after_seq)   # cold restart
         self._require(session_id)
         return []
 
@@ -71,7 +75,7 @@ class BridgeOrchestrator:
         """Artifacts derived from buffered events (§22.1) — real data."""
         self._require(session_id)
         out: list[dict[str, Any]] = []
-        for e in self.buffers[session_id].replay():
+        for e in self.replay(session_id):
             if e["type"].startswith("artifact."):
                 out.append({"event_id": e["id"], "type": e["type"],
                             "seq": e["seq"], **e["payload"]})
@@ -98,11 +102,19 @@ class BridgeOrchestrator:
                                 "params": {"session_id": session_id}})
 
     def _push(self, session_id: str, native: dict[str, Any]) -> bool:
-        ev = normalize(native, self.provider_id, session_id)
-        ok = self.buffers[session_id].push(ev)
-        if ok and self.store:
-            self.store.append(ev)      # durable shadow — survives restart
-        return ok
+        with self._push_lock:
+            # The orchestrator emits session.created at create/resume time;
+            # providers may repeat that lifecycle notification on every
+            # stream. Keep one lifecycle event per Bridge session.
+            if (native.get("type") == "session/new"
+                    and any(e.get("type") == "session.created"
+                            for e in self.buffers[session_id].replay())):
+                return False
+            ev = normalize(native, self.provider_id, session_id)
+            ok = self.buffers[session_id].push(ev)
+            if ok and self.store:
+                self.store.append(ev)      # durable shadow — survives restart
+            return ok
 
     def _require(self, session_id: str) -> None:
         if session_id not in self.sessions:

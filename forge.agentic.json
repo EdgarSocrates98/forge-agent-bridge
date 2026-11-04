@@ -1,0 +1,45 @@
+{
+  "schema": "forge/SpecialistAgenticManifest/v1",
+  "provider": "forge-agent-bridge",
+  "version": "0.2.0",
+  "cli": "forge-bridge",
+  "cli_entry": "forge_agent_bridge.cli:main",
+  "workflows": [
+    {
+      "id": "status",
+      "mode": "DIAGNOSTIC_ONLY",
+      "command": ["{cli}", "status"],
+      "description": "Report bridge status and detected provider inventory",
+      "read_only": true
+    },
+    {
+      "id": "providers",
+      "mode": "DIAGNOSTIC_ONLY",
+      "command": ["{cli}", "providers"],
+      "description": "Report the provider capability matrix",
+      "read_only": true
+    },
+    {
+      "id": "doctor",
+      "mode": "DIAGNOSTIC_ONLY",
+      "command": ["{cli}", "doctor"],
+      "description": "Diagnose executables, versions and honest auth states",
+      "read_only": true
+    },
+    {
+      "id": "sessions",
+      "mode": "DIAGNOSTIC_ONLY",
+      "command": ["{cli}", "sessions"],
+      "description": "List registered adapter sessions",
+      "read_only": true
+    }
+  ],
+  "skills": [],
+  "agents": [],
+  "coordinators": [],
+  "mcp_command": ["{cli}", "serve"],
+  "host_adapters": ["claude", "codex", "devin", "copilot"],
+  "read_only_default": true,
+  "requires_credentials": false,
+  "requires_network": false
+}

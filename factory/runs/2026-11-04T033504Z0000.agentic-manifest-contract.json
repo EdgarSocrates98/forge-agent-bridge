@@ -1,0 +1,15 @@
+{
+  "agent": "codex",
+  "command": [
+    "codex",
+    "exec",
+    "$(cat E:\\projetos\\FORJAS\\forge-agent-bridge\\factory\\prompts\\agentic-manifest-contract.implement.codex.md)"
+  ],
+  "created_at": "2026-11-04T03:35:04+00:00",
+  "id": "agentic-manifest-contract",
+  "prompt_path": "E:\\projetos\\FORJAS\\forge-agent-bridge\\factory\\prompts\\agentic-manifest-contract.implement.codex.md",
+  "spec_path": "E:\\projetos\\FORJAS\\forge-agent-bridge\\factory\\specs\\active\\agentic-manifest-contract.md",
+  "spec_sha256": "6b8ada965dbef2ad487aefe42c9aea4f9aaa6b4a2795aba3edd924f667ce0476",
+  "status": "planned",
+  "title": "Forge Agent Bridge agentic capability manifest"
+}

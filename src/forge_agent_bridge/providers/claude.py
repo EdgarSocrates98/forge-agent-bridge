@@ -152,6 +152,7 @@ class ClaudeAdapter:
     def _spawn(self, session_uuid: str, resume_ref: str | None,
                cwd: str,
                mcp_servers: list[dict[str, Any]] | None = None,
+               model: str | None = None,
                ) -> subprocess.Popen[bytes]:
         cmd = [self.EXE, "-p", "--verbose",
                "--output-format", "stream-json",
@@ -160,6 +161,8 @@ class ClaudeAdapter:
             cmd += ["--mcp-config", json.dumps(
                 {"mcpServers": {s["name"]: s.get("config", s)
                                 for s in mcp_servers}})]
+        if model and model != "default":
+            cmd += ["--model", model]
         if resume_ref:
             cmd += ["--resume", resume_ref]
         else:
@@ -179,12 +182,13 @@ class ClaudeAdapter:
         self.initialize()
         import uuid
         s = AgentSession(id=new_id("ses"), provider="claude-code",
+                         model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),
                          state=SessionState.ACTIVE, resumable=True)
         s.provider_session_ref = str(uuid.uuid4())
         proc = self._spawn(s.provider_session_ref, None, kw.get("cwd") or ".",
-                           mcp_servers=kw.get("mcp_servers"))
+                           mcp_servers=kw.get("mcp_servers"), model=s.model)
         q: queue.Queue[dict[str, Any]] = queue.Queue()
         self._procs[s.id] = proc
         self._queues[s.id] = q

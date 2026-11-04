@@ -6,7 +6,13 @@ import shutil
 from typing import Any
 
 from .adapter import ProviderAdapter
-from .contracts import AuthState, CapabilityState, ProviderCapability, ProviderDescriptor
+from .contracts import (
+    AuthState,
+    CapabilityState,
+    ProviderCapability,
+    ProviderDescriptor,
+    ProviderModel,
+)
 
 # Versioned capability vocabulary (§26.1) — every provider declares the
 # SAME capability names so the matrix is comparable row-by-row.
@@ -104,6 +110,22 @@ CATALOG: dict[str, dict[str, Any]] = {
     },
 }
 
+# A small, intentionally conservative catalogue. ``verified`` means the
+# Bridge knows how to pass the hint through; it does not claim that the
+# provider account currently has access to the model.
+MODEL_CATALOG: dict[str, list[ProviderModel]] = {
+    "claude-code": [
+        ProviderModel(id="default", label="Provider default", verified=True),
+        ProviderModel(id="sonnet", label="Sonnet", verified=False),
+        ProviderModel(id="opus", label="Opus", verified=False),
+        ProviderModel(id="haiku", label="Haiku", verified=False),
+    ],
+    "codex": [ProviderModel(id="default", label="Provider default", verified=True)],
+    "devin": [],
+    "github-copilot": [ProviderModel(id="default", label="Provider default", verified=True)],
+    "fake": [ProviderModel(id="default", label="Deterministic fake", verified=True)],
+}
+
 
 class ProviderRegistry:
     def __init__(self) -> None:
@@ -177,6 +199,7 @@ class ProviderRegistry:
                 version=version,
                 capabilities=[ProviderCapability(name=n, state=s)
                               for n, s in meta["capabilities"]],
+                models=[m.model_copy() for m in MODEL_CATALOG.get(pid, [])],
                 auth_state=auth_state,
                 matrix_version=MATRIX_VERSION,
             ))

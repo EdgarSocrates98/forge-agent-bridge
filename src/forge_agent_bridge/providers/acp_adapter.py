@@ -119,7 +119,8 @@ class AcpAdapter:
         try:
             client.initialize()
             acp_sid = client.new_session(cwd=kw.get("cwd") or ".",
-                                         mcp_servers=kw.get("mcp_servers"))
+                                         mcp_servers=kw.get("mcp_servers"),
+                                         model=kw.get("model"))
         except Exception:
             client.close()
             raise
@@ -129,6 +130,7 @@ class AcpAdapter:
     def _register(self, client: AcpClient, acp_sid: str, kw: dict[str, Any],
                   resumable: bool) -> AgentSession:
         s = AgentSession(id=new_id("ses"), provider=self.provider_id,
+                         model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),
                          state=SessionState.ACTIVE, resumable=resumable,

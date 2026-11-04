@@ -1119,6 +1119,7 @@ def make_app() -> Any:
                     s = _orch(provider).create_session(
                         product_id=body.get("product_id"),
                         workspace_id=body.get("workspace_id"),
+                        model=body.get("model"),
                         mcp_servers=body.get("mcp_servers"))
                     meta.upsert(s.id, provider=provider,
                                 product_id=s.product_id,

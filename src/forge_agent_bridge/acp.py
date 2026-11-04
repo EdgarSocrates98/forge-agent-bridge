@@ -126,8 +126,12 @@ class AcpClient:
         self.protocol_version = res.get("protocolVersion", PROTOCOL_VERSION)
         return res
 
-    def new_session(self, cwd: str = ".", mcp_servers: list[dict] | None = None) -> str:
-        res = self.request("session/new", {"cwd": cwd, "mcpServers": mcp_servers or []})
+    def new_session(self, cwd: str = ".", mcp_servers: list[dict] | None = None,
+                    model: str | None = None) -> str:
+        params: dict[str, Any] = {"cwd": cwd, "mcpServers": mcp_servers or []}
+        if model and model != "default":
+            params["model"] = model
+        res = self.request("session/new", params)
         sid = res.get("sessionId")
         if not sid:
             raise BridgeError("FAB-SESSION", "session/new returned no sessionId")

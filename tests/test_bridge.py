@@ -16,6 +16,16 @@ def test_provider_detection_honest():
     assert fake.capabilities and all(c.state.value for c in fake.capabilities)
     real = next(d for d in ds if d.id == "claude-code")
     assert real.auth_state.value in ("unverified", "unauthenticated")
+    assert any(m.id == "default" for m in real.models)
+
+
+def test_model_catalog_is_honest_for_unverified_hosts():
+    from forge_agent_bridge.registry import REGISTRY
+
+    devin = next(d for d in REGISTRY.detect_all() if d.id == "devin")
+    assert devin.models == []
+    assert any(c.name == "models" and c.state.value == "unverified"
+               for c in devin.capabilities)
 
 
 def test_pairing_revocation_survives_restart(tmp_path):
@@ -71,8 +81,9 @@ def test_session_lifecycle_and_events():
     from forge_agent_bridge.events import EventBuffer, normalize
     a = _fake()
     a.initialize()
-    s = a.create_session(product_id="p1")
+    s = a.create_session(product_id="p1", model="default")
     assert s.state.value == "active" and s.resumable
+    assert s.model == "default"
     a.send_prompt(s.id, "hello")
     buf = EventBuffer(s.id)
     types = []

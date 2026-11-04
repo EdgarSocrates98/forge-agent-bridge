@@ -54,6 +54,7 @@ class CopilotAdapter:
     def create_session(self, **kw: Any) -> AgentSession:
         self.initialize()
         s = AgentSession(id=new_id("ses"), provider="github-copilot",
+                         model=kw.get("model"),
                          product_id=kw.get("product_id"), workspace_id=kw.get("workspace_id"),
                          state=SessionState.ACTIVE, resumable=False)
         self.sessions[s.id] = s
@@ -75,7 +76,10 @@ class CopilotAdapter:
             raise SessionError("FAB-UNSUPPORTED", "attachments are not supported by Copilot CLI",
                                provider="github-copilot")
         try:
-            p = subprocess.run([self.EXE, "-p", prompt, "--silent", "--allow-all-tools"],
+            cmd = [self.EXE, "-p", prompt, "--silent", "--allow-all-tools"]
+            if self.sessions[session_id].model and self.sessions[session_id].model != "default":
+                cmd += ["--model", self.sessions[session_id].model]
+            p = subprocess.run(cmd,
                                capture_output=True, text=True, timeout=120, check=False)
         except FileNotFoundError as exc:
             raise ProviderUnavailableError("copilot not on PATH", provider="github-copilot") from exc

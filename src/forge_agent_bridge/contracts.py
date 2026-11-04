@@ -51,6 +51,14 @@ class ProviderCapability(BaseModel):
     detail: str = ""
 
 
+class ProviderModel(BaseModel):
+    """Selectable model hint exposed by a provider."""
+
+    id: str
+    label: str
+    verified: bool = False
+
+
 class ProviderDescriptor(BaseModel):
     id: str
     name: str
@@ -58,6 +66,7 @@ class ProviderDescriptor(BaseModel):
     executable: str | None = None
     version: str | None = None
     capabilities: list[ProviderCapability] = Field(default_factory=list)
+    models: list[ProviderModel] = Field(default_factory=list)
     auth_state: AuthState = AuthState.UNVERIFIED
     matrix_version: str = "forge/ProviderCapabilityMatrix/1"
 
@@ -65,6 +74,7 @@ class ProviderDescriptor(BaseModel):
 class AgentSession(BaseModel):
     id: str
     provider: str
+    model: str | None = None
     product_id: str | None = None
     workspace_id: str | None = None
     state: SessionState = SessionState.CREATED

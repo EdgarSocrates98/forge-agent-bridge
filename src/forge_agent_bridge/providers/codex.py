@@ -129,6 +129,7 @@ class CodexAdapter:
             raise UnsupportedCapabilityError(
                 "mcp_servers (use ~/.codex/config.toml)", provider="codex")
         s = AgentSession(id=new_id("ses"), provider="codex",
+                         model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),
                          state=SessionState.ACTIVE, resumable=True)
@@ -162,6 +163,9 @@ class CodexAdapter:
             cmd = [self.EXE, "exec", "resume", thread, "--json", prompt]
         else:
             cmd = [self.EXE, "exec", "--json", "--sandbox", self.sandbox, prompt]
+        model = self._sessions[session_id].model
+        if model and model != "default":
+            cmd[-1:-1] = ["--model", model]
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

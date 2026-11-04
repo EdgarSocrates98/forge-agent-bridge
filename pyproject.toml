@@ -27,3 +27,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored Forge UI kit (canonical: the-forge/src/theforge/ui) —
+# byte-identical to the shared source; linted in the canonical repo.
+"src/forge_agent_bridge/ui/**/*.py" = ["ALL"]

@@ -1,4 +1,5 @@
 """forge-bridge install — lifecycle contract (scope/profile/components)."""
+import os
 import stat
 
 from forge_agent_bridge.install import lifecycle
@@ -20,7 +21,10 @@ def test_apply_recommended(tmp_path):
     assert (root / "events").is_dir() and (root / "backups").is_dir()
     pt = root / "pair.token"
     assert pt.exists()
-    assert stat.S_IMODE(pt.stat().st_mode) == 0o600
+    # Windows reports inherited NTFS ACLs through st_mode; POSIX mode-bit
+    # enforcement is asserted where those bits represent the file policy.
+    if os.name != "nt":
+        assert stat.S_IMODE(pt.stat().st_mode) == 0o600
     assert (root / "providers.json").exists()
     assert (root / "components.json").exists()
     # honest: CLI-not-on-PATH lands in unverified, never applied
@@ -62,7 +66,12 @@ def test_doctor_honest_states(tmp_path):
     d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
     by = {c["check"]: c["state"] for c in d["checks"]}
     assert by["state-root"] == "ok"
-    assert by["pair-token-mode"] == "ok"
+    if os.name == "nt":
+        # ``st_mode`` does not expose the effective NTFS ACL.  The doctor
+        # must remain honest instead of claiming POSIX 0600 was verified.
+        assert by["pair-token-mode"].startswith("warn:")
+    else:
+        assert by["pair-token-mode"] == "ok"
     assert d["schema"] == "forge/BridgeDoctorReport/v1"
 
 
@@ -78,4 +87,5 @@ def test_uninstall_preserves_state(tmp_path):
 def test_scope_project_uses_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = lifecycle.install(scope="project", profile="minimal", yes=True)
-    assert r["root"].endswith("/.forge-bridge")
+    # Project roots use the host platform's path separator.
+    assert r["root"] == str(tmp_path / ".forge-bridge")

@@ -7,6 +7,7 @@ Emits a deterministic native event stream so the full pipeline
 from __future__ import annotations
 
 import itertools
+import sys
 from collections.abc import Iterator
 from typing import Any, ClassVar
 
@@ -14,9 +15,11 @@ from ..contracts import AgentSession, AuthState, ProviderDescriptor, SessionStat
 
 
 class FakeAdapter:
-    # test stub: the fake provider has no binary; its
-    # supervised process is a harmless sleeper (POSIX test surface)
-    SPAWN_ARGV: ClassVar[list[str]] = ["sleep", "3600"]
+    # test stub: the fake provider has no binary; its supervised process is a
+    # harmless Python sleeper that works on POSIX and Windows alike.
+    SPAWN_ARGV: ClassVar[list[str]] = [
+        sys.executable, "-c", "import time; time.sleep(3600)",
+    ]
 
     def __init__(self) -> None:
         self.sessions: dict[str, AgentSession] = {}

@@ -184,6 +184,14 @@ def install_status(
 
 
 def main() -> None:
+    if sys.argv[1:] in ([], ["tui"]):
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from forge_agent_bridge.ui.home import run_home
+
+            raise SystemExit(run_home())
+        if sys.argv[1:] == ["tui"]:
+            print("forge-bridge tui requires an interactive TTY", file=sys.stderr)
+            raise SystemExit(2)
     app()
 
 

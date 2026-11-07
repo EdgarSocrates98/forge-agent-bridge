@@ -16,6 +16,8 @@ from forge_agent_bridge.ui.kit import (
     select,
     status_table,
 )
+from forge_agent_bridge.ui.home import run_home
+from forge_agent_bridge.ui.tui import run_tui
 
 __all__ = [
     "UIContext",
@@ -25,5 +27,7 @@ __all__ = [
     "prompt",
     "select",
     "status_table",
+    "run_home",
+    "run_tui",
     "t",
 ]

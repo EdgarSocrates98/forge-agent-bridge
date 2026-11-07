@@ -1,6 +1,7 @@
 """Cycle 19 — bridge foundation contract tests (fake provider per spec)."""
 
 import json
+import os
 
 
 def _fake():
@@ -40,7 +41,11 @@ def test_pairing_revocation_survives_restart(tmp_path):
 
     second = Pairing("master", path)
     assert second.principal(exchanged["session_token"]) is None
-    assert path.stat().st_mode & 0o077 == 0
+    # POSIX exposes the hardened mode bits. Windows uses the inherited ACL;
+    # ``os.chmod(..., 0o600)`` still requests user-only read/write there, but
+    # the mode-bit projection is not authoritative on NTFS.
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o077 == 0
 
 
 def test_pairing_rotation_survives_restart(tmp_path):

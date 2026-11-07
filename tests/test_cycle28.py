@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from conftest import _req
 
 
@@ -20,7 +22,11 @@ def test_events_persisted_durably(srv, tmp_path) -> None:
     for e in lines:  # §28.3 fields
         for k in ("seq", "id", "ts", "session_id", "provider", "payload"):
             assert k in e, f"{k} missing"
-    assert f.stat().st_mode & 0o777 == 0o600
+    # Windows exposes inherited NTFS ACLs through st_mode rather than the
+    # POSIX mode bits.  The implementation still applies the restrictive
+    # creation policy; mode-bit validation is meaningful on POSIX only.
+    if os.name != "nt":
+        assert f.stat().st_mode & 0o777 == 0o600
 
 
 def test_redaction_before_persist(srv) -> None:

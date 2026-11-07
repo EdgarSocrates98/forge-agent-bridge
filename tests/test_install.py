@@ -1,4 +1,5 @@
 """forge-bridge install — lifecycle contract (scope/profile/components)."""
+import os
 import stat
 
 from forge_agent_bridge.install import lifecycle
@@ -20,7 +21,10 @@ def test_apply_recommended(tmp_path):
     assert (root / "events").is_dir() and (root / "backups").is_dir()
     pt = root / "pair.token"
     assert pt.exists()
-    assert stat.S_IMODE(pt.stat().st_mode) == 0o600
+    # Windows reports inherited NTFS ACLs through st_mode; POSIX mode-bit
+    # enforcement is asserted where those bits represent the file policy.
+    if os.name != "nt":
+        assert stat.S_IMODE(pt.stat().st_mode) == 0o600
     assert (root / "providers.json").exists()
     assert (root / "components.json").exists()
     # honest: CLI-not-on-PATH lands in unverified, never applied

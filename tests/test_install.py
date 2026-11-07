@@ -66,7 +66,12 @@ def test_doctor_honest_states(tmp_path):
     d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
     by = {c["check"]: c["state"] for c in d["checks"]}
     assert by["state-root"] == "ok"
-    assert by["pair-token-mode"] == "ok"
+    if os.name == "nt":
+        # ``st_mode`` does not expose the effective NTFS ACL.  The doctor
+        # must remain honest instead of claiming POSIX 0600 was verified.
+        assert by["pair-token-mode"].startswith("warn:")
+    else:
+        assert by["pair-token-mode"] == "ok"
     assert d["schema"] == "forge/BridgeDoctorReport/v1"
 
 
@@ -82,4 +87,5 @@ def test_uninstall_preserves_state(tmp_path):
 def test_scope_project_uses_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = lifecycle.install(scope="project", profile="minimal", yes=True)
-    assert r["root"].endswith("/.forge-bridge")
+    # Project roots use the host platform's path separator.
+    assert r["root"] == str(tmp_path / ".forge-bridge")

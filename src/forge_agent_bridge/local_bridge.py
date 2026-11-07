@@ -1022,7 +1022,11 @@ def make_app() -> Any:
                 return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
                                                 "message": "mcp route"}})
             if parts and parts[0] == "context":
-                from .context import AgentContextDelta, ProductAgentSessionContext
+                from .context import (
+                    AgentContextDelta,
+                    KnowledgeContextPack,
+                    ProductAgentSessionContext,
+                )
                 if self.command == "POST" and parts == ["context", "draft"]:
                     # §27.2 — minimal context package for a product binding
                     ctx = ProductAgentSessionContext.model_validate({
@@ -1041,6 +1045,16 @@ def make_app() -> Any:
                                session=sid,
                                context_version=ctx.context_version)
                     return self._send(200, {"bound": True})
+                if self.command == "POST" and parts == ["context", "authorize-pack"]:
+                    sid = str(body.get("session_id") or "")
+                    pack = KnowledgeContextPack.validate_contract(body.get("pack") or {})
+                    authorized = ctxs.authorize_knowledge_pack(sid, pack)
+                    audit.emit("context.authorize-pack", auth.get("actor", "local"),
+                               session=sid, pack_id=authorized.pack_id)
+                    return self._send(200, {
+                        "authorized": True,
+                        "pack": authorized.model_dump(mode="json", by_alias=True),
+                    })
                 if (self.command == "POST" and len(parts) == 2
                         and parts[1] == "delta"):
                     d = AgentContextDelta.model_validate({

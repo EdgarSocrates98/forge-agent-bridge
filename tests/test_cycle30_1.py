@@ -9,7 +9,11 @@ import pytest
 from conftest import _req
 from forge_agent_bridge.adapter import BridgeError
 from forge_agent_bridge.approvals import ApprovalStore
-from forge_agent_bridge.context import ContextStore, ProductAgentSessionContext
+from forge_agent_bridge.context import (
+    ContextStore,
+    KnowledgeContextPack,
+    ProductAgentSessionContext,
+)
 from forge_agent_bridge.local_bridge import _ALLOWED_HOSTS
 
 
@@ -115,6 +119,33 @@ def test_require_context_policy(tmp_path):
     store.assert_allowed("unbound")
     with pytest.raises(BridgeError, match="bound product context"):
         store.assert_allowed("unbound", require_context=True)
+
+
+def test_knowledge_pack_is_reauthorized_before_injection(tmp_path):
+    store = ContextStore(path=tmp_path)
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", allowed_knowledge_sources=["atlas"]
+    ))
+    pack = KnowledgeContextPack(
+        pack_id="pack-1", workspace_id="ws-1", principal="agent-1",
+        source_versions={"atlas": "7"}, selected_items=["item-1"],
+    )
+    assert store.authorize_knowledge_pack("s9", pack).pack_id == "pack-1"
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", allowed_knowledge_sources=["other"]
+    ))
+    with pytest.raises(BridgeError, match="allowlist"):
+        store.authorize_knowledge_pack("s9", pack)
+
+
+def test_knowledge_pack_principal_mismatch_is_denied(tmp_path):
+    store = ContextStore(path=tmp_path)
+    store.bind("s9", ProductAgentSessionContext(identity="agent-1"))
+    pack = KnowledgeContextPack(
+        pack_id="pack-1", workspace_id="ws-1", principal="agent-2"
+    )
+    with pytest.raises(BridgeError, match="principal"):
+        store.authorize_knowledge_pack("s9", pack)
 
 
 def test_integrity_endpoint(srv):

@@ -24,6 +24,7 @@ from .adapter import BridgeError
 CONTEXT_SCHEMA = "forge/ProductAgentSessionContext/v2"
 DELTA_SCHEMA = "forge/AgentContextDelta/v1"
 MCP_SCHEMA = "forge/MCPServerDescriptor/v1"
+KNOWLEDGE_CONTEXT_PACK_SCHEMA = "theforge/KnowledgeContextPack/v1"
 
 
 class ProductAgentSessionContext(BaseModel):
@@ -83,6 +84,38 @@ class AgentContextDelta(BaseModel):
     created_at: str = ""
 
     model_config = {"populate_by_name": True}
+
+
+class KnowledgeContextPack(BaseModel):
+    """Cross-Forge context pack accepted only after session re-authorization."""
+
+    schema_: str = Field(default=KNOWLEDGE_CONTEXT_PACK_SCHEMA, alias="schema")
+    pack_id: str
+    query: str = ""
+    workspace_id: str
+    principal: str
+    source_versions: dict[str, str] = Field(default_factory=dict)
+    selected_items: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    estimated_tokens: int = 0
+    budget_tokens: int = 0
+    truncations: list[str] = Field(default_factory=list)
+    degraded_state: str = "none"
+    diagnostics: list[str] = Field(default_factory=list)
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def validate_contract(cls, value: dict[str, Any]) -> "KnowledgeContextPack":
+        pack = cls.model_validate(value)
+        if pack.schema_ != KNOWLEDGE_CONTEXT_PACK_SCHEMA:
+            raise ValueError("unsupported knowledge context pack schema")
+        if pack.estimated_tokens < 0 or pack.budget_tokens < 0:
+            raise ValueError("context token counts must be non-negative")
+        if pack.budget_tokens and pack.estimated_tokens > pack.budget_tokens and not pack.truncations:
+            raise ValueError("over-budget context pack must record truncations")
+        return pack
 
 
 class MCPServerDescriptor(BaseModel):
@@ -176,6 +209,18 @@ class ContextStore:
             _deny("knowledge source", source, ctx.allowed_knowledge_sources)
         if dataset:
             _deny("dataset", dataset, ctx.allowed_datasets)
+
+    def authorize_knowledge_pack(self, session_id: str,
+                                 pack: KnowledgeContextPack) -> KnowledgeContextPack:
+        """Re-check principal and every source immediately before injection."""
+        ctx = self.context_of(session_id)
+        if ctx is None:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack requires a bound context")
+        if ctx.identity and pack.principal != ctx.identity:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack principal mismatch")
+        for source_id in sorted(pack.source_versions):
+            self.assert_allowed(session_id, source=source_id, require_context=True)
+        return pack
 
     def record_delta(self, delta: AgentContextDelta) -> None:
         """§27.7 — knowledge capture outbox; PF indexes after review."""

@@ -695,7 +695,10 @@ def make_app() -> Any:
             if self.command == "GET" and parts == ["providers"]:
                 from .registry import REGISTRY
                 items = []
-                for d in REGISTRY.detect_all():
+                # Catalog discovery must not invoke third-party CLIs on the
+                # request thread.  Provider auth/version probes can be slow or
+                # interactive; diagnostics owns that explicitly probed path.
+                for d in REGISTRY.detect_all(probe=False):
                     item = d.model_dump(mode="json")
                     if d.id == "claude-code":
                         from .providers.claude import ClaudeAdapter

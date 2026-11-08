@@ -170,12 +170,15 @@ class ProviderRegistry:
             return FakeAdapter()
         return None
 
-    def detect_all(self) -> list[ProviderDescriptor]:
+    def detect_all(self, *, probe: bool = True) -> list[ProviderDescriptor]:
         """Detect binaries and ask installed providers for auth/version state.
 
         A binary on PATH is not treated as logged in.  Where the provider
         exposes an official local status command, use it; failures remain
-        ``unverified`` rather than becoming a false positive.
+        ``unverified`` rather than becoming a false positive.  ``probe=False``
+        returns the local executable/catalog surface without invoking provider
+        CLIs.  This is the bounded path for latency-sensitive HTTP discovery;
+        diagnostics and explicit CLI inspection can still request probes.
         """
         out: list[ProviderDescriptor] = []
         for pid, meta in CATALOG.items():
@@ -185,14 +188,15 @@ class ProviderRegistry:
             version = None
             if installed:
                 auth_state = AuthState.UNVERIFIED
-                try:
-                    adapter = self._resolve(pid)
-                    if adapter:
-                        raw_auth = str(adapter.get_auth_status() or "unverified")
-                        auth_state = AuthState(raw_auth)
-                        version = adapter.get_version()
-                except Exception:  # noqa: BLE001 - provider probing is best effort
-                    auth_state = AuthState.UNVERIFIED
+                if probe:
+                    try:
+                        adapter = self._resolve(pid)
+                        if adapter:
+                            raw_auth = str(adapter.get_auth_status() or "unverified")
+                            auth_state = AuthState(raw_auth)
+                            version = adapter.get_version()
+                    except Exception:  # noqa: BLE001 - provider probing is best effort
+                        auth_state = AuthState.UNVERIFIED
             out.append(ProviderDescriptor(
                 id=pid, name=meta["name"], kind=meta["kind"],
                 executable=installed,

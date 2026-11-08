@@ -47,6 +47,40 @@ def test_redaction_before_persist(srv) -> None:
     }
 
 
+def test_adversarial_free_text_redaction_preserves_diagnostics() -> None:
+    from forge_agent_bridge.events import redact
+
+    value = redact({
+        "message": (
+            "request failed Authorization: Bearer live-token; "
+            "token=abc123 https://user:pass@host/path?access_token=url-secret "
+            "sk-live-value ghp_live_value"
+        ),
+        "nested": [{"headers": "Bearer another-token"}],
+        "keep": "status=degraded route=/health",
+    })
+    text = str(value)
+    for secret in ("live-token", "abc123", "pass@host", "url-secret",
+                   "sk-live-value", "ghp_live_value", "another-token"):
+        assert secret not in text
+    assert "request failed" in value["message"]
+    assert "status=degraded route=/health" == value["keep"]
+
+
+def test_normalized_event_is_safe_before_persistence() -> None:
+    from forge_agent_bridge.events import normalize
+
+    event = normalize({
+        "type": "vendor.new",
+        "payload": {"message": "Bearer in-memory-secret"},
+        "headers": "Authorization: Bearer header-secret",
+    }, "p", "s1")
+    serialized = str(event)
+    assert "in-memory-secret" not in serialized
+    assert "header-secret" not in serialized
+    assert event["type"] == "runtime.unknown"
+
+
 def test_durable_replay_cursor(srv) -> None:
     port, tok = srv
     _, s = _req(port, tok, "POST", "/agent-sessions", {"provider": "fake"})

@@ -59,11 +59,13 @@ def envelope(
         "seq": _next_seq(),
         "type": event_type,
         "known_type": known,
-        "payload": payload,
+        "payload": redact(payload),
         "product_id": product_id,
         "workspace_id": workspace_id,
         "origin": "bridge",
-        "raw": raw,  # native event preserved for diagnostics when unmapped
+        # Native data remains available for diagnostics, but never carries a
+        # credential into an in-memory consumer such as Portal or Lens.
+        "raw": redact(raw) if raw is not None else None,
     }
 
 
@@ -107,15 +109,34 @@ _SECRET_KEYS = re.compile(
     re.IGNORECASE,
 )
 _REDACTED = "[redacted]"
+_SECRET_ASSIGNMENT = re.compile(
+    r"(\b(?:access[_-]?token|token|secret|password|api[_-]?key|"
+    r"authorization|credential)\b\s*[:=]\s*(?:Bearer\s+)?)"
+    r"([^\s,;&]+)", re.IGNORECASE)
+_BEARER = re.compile(r"(\bBearer\s+)([^\s,;&]+)", re.IGNORECASE)
+_KNOWN_TOKEN = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_-]+|xox[baprs]-[A-Za-z0-9-]+)\b")
+_URL_CREDENTIAL = re.compile(r"(://[^:/?#\s]+:)([^@/\s]+)(@)")
 
 
 def redact(obj: Any) -> Any:
-    """Recursively redact secret-looking keys before persistence."""
+    """Recursively redact secret-looking keys and values.
+
+    Key-based redaction handles structured provider payloads; the bounded
+    value patterns cover diagnostics that arrive as free text or URLs.  The
+    replacement preserves the surrounding field name and shape so operators
+    can still identify the failed operation without retaining its secret.
+    """
     if isinstance(obj, dict):
         return {k: (_REDACTED if _SECRET_KEYS.search(str(k)) else redact(v))
                 for k, v in obj.items()}
     if isinstance(obj, list):
         return [redact(v) for v in obj]
+    if isinstance(obj, str):
+        value = _SECRET_ASSIGNMENT.sub(r"\1" + _REDACTED, obj)
+        value = _BEARER.sub(r"\1" + _REDACTED, value)
+        value = _KNOWN_TOKEN.sub(_REDACTED, value)
+        return _URL_CREDENTIAL.sub(r"\1" + _REDACTED + r"\3", value)
     return obj
 
 

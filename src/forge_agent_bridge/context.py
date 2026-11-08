@@ -107,7 +107,7 @@ class KnowledgeContextPack(BaseModel):
     model_config = {"populate_by_name": True}
 
     @classmethod
-    def validate_contract(cls, value: dict[str, Any]) -> "KnowledgeContextPack":
+    def validate_contract(cls, value: dict[str, Any]) -> KnowledgeContextPack:
         pack = cls.model_validate(value)
         if pack.schema_ != KNOWLEDGE_CONTEXT_PACK_SCHEMA:
             raise ValueError("unsupported knowledge context pack schema")

@@ -124,15 +124,18 @@ def test_require_context_policy(tmp_path):
 def test_knowledge_pack_is_reauthorized_before_injection(tmp_path):
     store = ContextStore(path=tmp_path)
     store.bind("s9", ProductAgentSessionContext(
-        identity="agent-1", allowed_knowledge_sources=["atlas"]
+        identity="agent-1", workspace_id="ws-1", product_id="p1",
+        allowed_knowledge_sources=["atlas"]
     ))
     pack = KnowledgeContextPack(
         pack_id="pack-1", workspace_id="ws-1", principal="agent-1",
+        product_id="p1",
         source_versions={"atlas": "7"}, selected_items=["item-1"],
     )
     assert store.authorize_knowledge_pack("s9", pack).pack_id == "pack-1"
     store.bind("s9", ProductAgentSessionContext(
-        identity="agent-1", allowed_knowledge_sources=["other"]
+        identity="agent-1", workspace_id="ws-1", product_id="p1",
+        allowed_knowledge_sources=["other"]
     ))
     with pytest.raises(BridgeError, match="allowlist"):
         store.authorize_knowledge_pack("s9", pack)
@@ -140,11 +143,56 @@ def test_knowledge_pack_is_reauthorized_before_injection(tmp_path):
 
 def test_knowledge_pack_principal_mismatch_is_denied(tmp_path):
     store = ContextStore(path=tmp_path)
-    store.bind("s9", ProductAgentSessionContext(identity="agent-1"))
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", workspace_id="ws-1"))
     pack = KnowledgeContextPack(
         pack_id="pack-1", workspace_id="ws-1", principal="agent-2"
     )
     with pytest.raises(BridgeError, match="principal"):
+        store.authorize_knowledge_pack("s9", pack)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("workspace_id", "ws-2", "workspace"),
+        ("product_id", "p2", "product"),
+    ],
+)
+def test_knowledge_pack_scope_mismatch_is_denied(tmp_path, field, value, message):
+    store = ContextStore(path=tmp_path)
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", workspace_id="ws-1", product_id="p1",
+        allowed_knowledge_sources=["atlas"]))
+    pack = KnowledgeContextPack(
+        pack_id="pack-1", workspace_id="ws-1", product_id="p1",
+        principal="agent-1", source_versions={"atlas": "7"})
+    pack = pack.model_copy(update={field: value})
+    with pytest.raises(BridgeError, match=message):
+        store.authorize_knowledge_pack("s9", pack)
+
+
+def test_empty_source_allowlist_is_denied_for_pack(tmp_path):
+    store = ContextStore(path=tmp_path)
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", workspace_id="ws-1"))
+    pack = KnowledgeContextPack(
+        pack_id="pack-1", workspace_id="ws-1", principal="agent-1",
+        source_versions={"atlas": "7"})
+    with pytest.raises(BridgeError, match="allowlist"):
+        store.authorize_knowledge_pack("s9", pack)
+
+
+def test_inline_item_requires_verifiable_origin(tmp_path):
+    store = ContextStore(path=tmp_path)
+    store.bind("s9", ProductAgentSessionContext(
+        identity="agent-1", workspace_id="ws-1", product_id="p1",
+        allowed_knowledge_sources=["atlas"]))
+    pack = KnowledgeContextPack(
+        pack_id="pack-1", workspace_id="ws-1", product_id="p1",
+        principal="agent-1", source_versions={"atlas": "7"},
+        selected_items=["item-1"], items=[{"id": "item-1", "source_id": "atlas"}])
+    with pytest.raises(BridgeError, match="workspace mismatch"):
         store.authorize_knowledge_pack("s9", pack)
 
 

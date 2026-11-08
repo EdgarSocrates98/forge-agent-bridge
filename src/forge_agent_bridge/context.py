@@ -94,6 +94,7 @@ class KnowledgeContextPack(BaseModel):
     query: str = ""
     workspace_id: str
     principal: str
+    product_id: str | None = None
     source_versions: dict[str, str] = Field(default_factory=dict)
     selected_items: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
@@ -205,21 +206,60 @@ class ContextStore:
                     "FAB-FORBIDDEN",
                     f"restricted tool '{tool}' requires an explicit grant")
             _deny("tool", tool, ctx.allowed_tools)
-        if source:
-            _deny("knowledge source", source, ctx.allowed_knowledge_sources)
+        if source and (not ctx.allowed_knowledge_sources
+                       or source not in ctx.allowed_knowledge_sources):
+            raise BridgeError(
+                "FAB-FORBIDDEN",
+                f"knowledge source '{source}' is not in the allowlist")
         if dataset:
             _deny("dataset", dataset, ctx.allowed_datasets)
 
     def authorize_knowledge_pack(self, session_id: str,
                                  pack: KnowledgeContextPack) -> KnowledgeContextPack:
-        """Re-check principal and every source immediately before injection."""
+        """Re-check the complete authorization boundary before injection.
+
+        A context pack is untrusted input. Workspace/product scope and every
+        inline item are checked here, immediately before a caller can inject
+        content into a provider. An empty source allowlist is deny-by-default
+        for this operation; it never means "all sources".
+        """
         ctx = self.context_of(session_id)
         if ctx is None:
             raise BridgeError("FAB-FORBIDDEN", "knowledge pack requires a bound context")
+        if ctx.session_id and ctx.session_id != session_id:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack session mismatch")
         if ctx.identity and pack.principal != ctx.identity:
             raise BridgeError("FAB-FORBIDDEN", "knowledge pack principal mismatch")
-        for source_id in sorted(pack.source_versions):
+        if not ctx.workspace_id or pack.workspace_id != ctx.workspace_id:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack workspace mismatch")
+        if ctx.product_id and pack.product_id != ctx.product_id:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack product mismatch")
+        if (pack.selected_items or pack.evidence_ids or pack.items) and not pack.source_versions:
+            raise BridgeError("FAB-FORBIDDEN", "knowledge pack has no source versions")
+        for source_id, version in sorted(pack.source_versions.items()):
+            if not source_id.strip() or not str(version).strip():
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack source version is invalid")
             self.assert_allowed(session_id, source=source_id, require_context=True)
+        selected = set(pack.selected_items)
+        for item in pack.items:
+            if not isinstance(item, dict):
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item is invalid")
+            item_id = str(item.get("item_id") or item.get("id") or "")
+            source_id = str(item.get("source_id") or "")
+            document_id = str(item.get("document_id") or "")
+            item_workspace = str(item.get("workspace_id") or "")
+            item_product = item.get("product_id")
+            item_version = str(item.get("version") or item.get("document_version") or "")
+            if not item_id or (selected and item_id not in selected):
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item is not selected")
+            if not source_id or source_id not in pack.source_versions:
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item source mismatch")
+            if not document_id or not item_workspace or item_workspace != pack.workspace_id:
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item workspace mismatch")
+            if ctx.product_id and item_product != ctx.product_id:
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item product mismatch")
+            if not item_version or item_version != pack.source_versions[source_id]:
+                raise BridgeError("FAB-FORBIDDEN", "knowledge pack item version mismatch")
         return pack
 
     def record_delta(self, delta: AgentContextDelta) -> None:

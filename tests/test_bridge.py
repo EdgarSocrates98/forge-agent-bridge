@@ -29,6 +29,23 @@ def test_model_catalog_is_honest_for_unverified_hosts():
                for c in devin.capabilities)
 
 
+def test_provider_catalog_can_skip_external_cli_probes(monkeypatch):
+    """HTTP discovery stays bounded even when a provider CLI is unhealthy."""
+    from forge_agent_bridge.registry import REGISTRY
+
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+
+    def fail_probe(*_args, **_kwargs):
+        raise AssertionError("catalog discovery unexpectedly probed a provider")
+
+    monkeypatch.setattr("subprocess.run", fail_probe)
+    detected = REGISTRY.detect_all(probe=False)
+    assert len(detected) == 5
+    assert all(item.executable for item in detected if item.id != "fake")
+    assert all(item.auth_state.value == "unverified"
+               for item in detected if item.id != "fake")
+
+
 def test_pairing_revocation_survives_restart(tmp_path):
     from forge_agent_bridge.pairing import Pairing
 

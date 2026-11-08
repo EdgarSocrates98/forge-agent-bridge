@@ -127,9 +127,33 @@ def test_resume_cancel_close_and_errors():
 def test_unmapped_native_event_preserved():
     from forge_agent_bridge.events import normalize
     ev = normalize({"type": "vendor.weird", "x": 1}, "p", "s1")
-    assert ev["type"] == "runtime.error"
+    assert ev["type"] == "runtime.unknown"
     assert ev["payload"]["native_type"] == "vendor.weird"
     assert ev["raw"]["x"] == 1  # native preserved for diagnostics
+
+
+def test_unknown_native_shapes_are_not_execution_errors():
+    from forge_agent_bridge.events import normalize
+
+    cases = (
+        {},
+        {"type": 42},
+        {"type": "vendor.new", "payload": None},
+        {"type": "vendor.new", "payload": ["unexpected"]},
+    )
+    for native in cases:
+        event = normalize(native, "p", "s1")
+        assert event["type"] == "runtime.unknown"
+        assert event["known_type"] is True
+        assert event["raw"] == native
+
+
+def test_native_error_remains_a_real_runtime_error():
+    from forge_agent_bridge.events import normalize
+
+    event = normalize({"type": "error", "payload": {"message": "failed"}},
+                      "p", "s1")
+    assert event["type"] == "runtime.error"
 
 
 def test_capability_matrix_states():

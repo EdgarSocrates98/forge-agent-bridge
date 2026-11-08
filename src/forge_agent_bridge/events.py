@@ -222,14 +222,33 @@ NATIVE_MAP: dict[str, str] = {
 
 
 def normalize(native: dict[str, Any], provider: str, session_id: str) -> dict[str, Any]:
-    """Map a provider-native event to the v1 envelope. Unknown native types
-    are preserved under `raw` with type `runtime.unknown` — never dropped."""
-    ntype = str(native.get("type") or native.get("method") or "unknown")
+    """Map a provider-native event to the v1 envelope.
+
+    An unmapped provider event is diagnostic information, not evidence that
+    the provider failed.  Keep real provider ``error`` events as
+    ``runtime.error`` while classifying unknown, malformed, or newly-added
+    native shapes as ``runtime.unknown`` and preserving them under ``raw``.
+    """
+    raw_type = native.get("type")
+    if raw_type is None:
+        raw_type = native.get("method")
+    if not isinstance(raw_type, str) or not raw_type:
+        ntype = ("unknown" if raw_type is None or raw_type == ""
+                 else f"<non-text:{type(raw_type).__name__}>")
+    else:
+        ntype = raw_type
+
     mapped = NATIVE_MAP.get(ntype)
+    native_payload = native.get("payload")
+    if native_payload is None:
+        native_payload = native.get("params")
+    payload = (native_payload if isinstance(native_payload, dict)
+               else ({"native_payload": native_payload}
+                     if native_payload is not None else {}))
     if mapped:
-        return envelope(mapped, provider, session_id,
-                        native.get("payload") or native.get("params") or {},
-                        raw=native)
-    return envelope("runtime.error", provider, session_id,
-                    {"reason": "unmapped-native-event", "native_type": ntype},
+        return envelope(mapped, provider, session_id, payload, raw=native)
+    return envelope("runtime.unknown", provider, session_id,
+                    {"reason": "unmapped-native-event", "native_type": ntype,
+                     "payload_shape": type(native_payload).__name__
+                     if native_payload is not None else None},
                     raw=native)

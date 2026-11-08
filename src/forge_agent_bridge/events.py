@@ -131,6 +131,10 @@ class DurableEventStore:
 
     def __init__(self, root: Path, *, max_events: int = 10_000,
                  max_bytes: int = 64 * 1024 * 1024) -> None:
+        if max_events < 1:
+            raise ValueError("max_events must be at least 1")
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_events = max_events
@@ -154,6 +158,7 @@ class DurableEventStore:
                 path.chmod(0o600)
             except OSError:
                 pass
+            self._enforce_retention_locked(path, str(e["session_id"]))
 
     def replay(self, session_id: str, after_seq: int = 0
                ) -> list[dict[str, Any]]:
@@ -180,24 +185,72 @@ class DurableEventStore:
             f = self._file(session_id)
             if not f.exists():
                 return
-            lines = f.read_text(encoding="utf-8").splitlines()
-            while lines and (
-                    len(lines) > self.max_events
-                    or sum(len(line.encode("utf-8")) + 1 for line in lines)
-                    > self.max_bytes):
-                lines.pop(0)
-            if not lines:
-                return
+            self._enforce_retention_locked(f, session_id)
+
+    def _enforce_retention_locked(self, path: Path, session_id: str) -> None:
+        """Apply retention while the store lock is held.
+
+        A trim marker is metadata and counts toward both configured limits.
+        Once a session has been trimmed, one marker is retained and the
+        event budget becomes ``max_events - 1``.  Malformed JSONL is surfaced
+        instead of being silently discarded.
+        """
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+        if not raw_lines:
+            return
+        entries: list[tuple[str, dict[str, Any]]] = []
+        for line_number, line in enumerate(raw_lines, start=1):
+            try:
+                entries.append((line, json.loads(line)))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"malformed event JSONL at {path}:{line_number}") from exc
+
+        marker_lines = [line for line, entry in entries
+                        if entry.get("type") == "session.retention-trim"]
+        event_lines = [line for line, entry in entries
+                       if entry.get("type") != "session.retention-trim"]
+        marker = marker_lines[0] if marker_lines else None
+
+        def size(lines: list[str], marker_line: str | None) -> int:
+            total = sum(len(line.encode("utf-8")) + 1 for line in lines)
+            if marker_line is not None:
+                total += len(marker_line.encode("utf-8")) + 1
+            return total
+
+        already_within_limits = (
+            len(event_lines) + (1 if marker is not None else 0)
+            <= self.max_events
+            and size(event_lines, marker) <= self.max_bytes
+        )
+        if already_within_limits and len(marker_lines) <= 1:
+            return
+
+        if marker is None:
             marker = json.dumps({
                 "schema": EVENT_SCHEMA, "id": new_id("evt"), "ts": utcnow(),
                 "provider": "bridge", "session_id": session_id,
                 "turn_id": None, "seq": 0, "type": "session.retention-trim",
-                "payload": {"note": "oldest events trimmed by retention"}})
-            f.write_text(marker + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
-            try:
-                f.chmod(0o600)
-            except OSError:
-                pass
+                "payload": {"note": "oldest events trimmed by retention"}},
+                separators=(",", ":"))
+
+        while event_lines and (
+                len(event_lines) + 1 > self.max_events
+                or size(event_lines, marker) > self.max_bytes):
+            event_lines.pop(0)
+
+        if size(event_lines, marker) > self.max_bytes:
+            raise ValueError(
+                "max_bytes is too small to persist the retention marker")
+
+        content = marker + "\n"
+        if event_lines:
+            content += "\n".join(event_lines) + "\n"
+        path.write_text(content, encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
 
 
 # Minimal native→normalized mapping seeds. Providers extend per-adapter.

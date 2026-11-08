@@ -79,6 +79,41 @@ def test_retention_marker_not_silent(srv, tmp_path) -> None:
     assert "session.retention-trim" in all_lines
 
 
+def test_retention_is_enforced_on_append_and_idempotent(tmp_path) -> None:
+    import json
+
+    from forge_agent_bridge.events import DurableEventStore
+
+    st = DurableEventStore(tmp_path / "ev", max_events=3)
+    for i in range(6):
+        st.append({"schema": "x", "id": f"e{i}", "seq": i + 1,
+                   "session_id": "s", "provider": "fake", "payload": {}})
+    path = tmp_path / "ev" / "s.jsonl"
+    first = path.read_text()
+    entries = [json.loads(line) for line in first.splitlines()]
+    assert len(entries) == 3  # marker + two retained events
+    assert sum(e.get("type") == "session.retention-trim" for e in entries) == 1
+    assert [e["id"] for e in st.replay("s")] == ["e4", "e5"]
+
+    st.enforce_retention("s")
+    assert path.read_text() == first
+
+
+def test_retention_byte_budget_includes_marker(tmp_path) -> None:
+    import json
+
+    from forge_agent_bridge.events import DurableEventStore
+
+    st = DurableEventStore(tmp_path / "ev", max_events=3,
+                           max_bytes=300)
+    for i in range(4):
+        st.append({"schema": "x", "id": f"e{i}", "seq": i + 1,
+                   "session_id": "s", "provider": "fake", "payload": {}})
+    path = tmp_path / "ev" / "s.jsonl"
+    assert path.stat().st_size <= 300
+    assert len([json.loads(line) for line in path.read_text().splitlines()]) == 1
+
+
 def test_recovery_plan_modes(srv) -> None:
     port, tok = srv
     _, s = _req(port, tok, "POST", "/agent-sessions",

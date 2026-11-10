@@ -1,0 +1,9 @@
+{
+  "cycle": "2.7",
+  "repository": "forge-agent-bridge",
+  "version": "0.2.1",
+  "tag": "v0.2.1",
+  "source_commit": "217ab33f82c30f2a1ccb05a90068d412b69ad6b0",
+  "version_source": "pyproject.toml and forge_agent_bridge.__version__",
+  "verified_at": "2026-11-10"
+}

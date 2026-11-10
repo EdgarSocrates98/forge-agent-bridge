@@ -1,7 +1,7 @@
 {
   "schema": "forge/SpecialistAgenticManifest/v1",
   "provider": "forge-agent-bridge",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "cli": "forge-bridge",
   "cli_entry": "forge_agent_bridge.cli:main",
   "workflows": [

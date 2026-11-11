@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Forge Agent Bridge - Logo" width="420">
+</p>
+
 # Forge Agent Bridge
 
 A **provider-agnostic agent session bridge** for the Forge ecosystem. One

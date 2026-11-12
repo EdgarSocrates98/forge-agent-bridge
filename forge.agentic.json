@@ -61,6 +61,7 @@
     "mcp",
     "serve"
   ],
+  "mcp_verify_tool": "forge_health",
   "host_adapters": [
     "claude",
     "codex",

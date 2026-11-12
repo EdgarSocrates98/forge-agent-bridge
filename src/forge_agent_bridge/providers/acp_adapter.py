@@ -129,7 +129,8 @@ class AcpAdapter:
 
     def _register(self, client: AcpClient, acp_sid: str, kw: dict[str, Any],
                   resumable: bool) -> AgentSession:
-        s = AgentSession(id=new_id("ses"), provider=self.provider_id,
+        s = AgentSession(id=str(kw.get("session_id") or new_id("ses")),
+                         provider=self.provider_id,
                          model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),

@@ -7,7 +7,7 @@ name = "forge-agent-bridge"
 version = "0.2.2"
 description = "Forge Agent Bridge — universal agent session/event/approval contracts and provider adapters (Claude Code, Codex, Devin)"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.6", "typer>=0.12"]
+dependencies = ["pydantic>=2.6", "typer>=0.12", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
@@ -32,3 +32,5 @@ src = ["src", "tests"]
 # Vendored Forge UI kit (canonical: the-forge/src/theforge/ui) —
 # byte-identical to the shared source; linted in the canonical repo.
 "src/forge_agent_bridge/ui/**/*.py" = ["ALL"]
+# Vendored forge_obsidian engine — byte-parity; linted in the canonical repo.
+"src/forge_agent_bridge/_forge_obsidian/**" = ["ALL"]

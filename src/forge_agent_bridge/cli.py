@@ -14,6 +14,14 @@ from .registry import REGISTRY
 
 app = typer.Typer(help="Forge Agent Bridge — universal agent session layer")
 
+from ._forge_obsidian.cli import obsidian_app as _obsidian_app
+
+app.add_typer(_obsidian_app("forge-agent-bridge"), name="obsidian")
+
+from .mcp.cli import mcp_app as _mcp_app
+
+app.add_typer(_mcp_app, name="mcp")
+
 
 def _version_cb(value: bool) -> None:
     if value:

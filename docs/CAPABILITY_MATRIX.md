@@ -35,6 +35,23 @@ stores credentials.
 | Handoff `context-rebuild` | supported | `continuity: "reconstructed"` — never claims identical state |
 | Audit log | supported | JSONL, append-only |
 
+## Native MCP surface (v0.2.2+)
+
+| Surface | State | Notes |
+|---|---|---|
+| `forge-bridge mcp serve` (stdio JSON-RPC) | supported | 58 deterministic tests + live stdio smoke |
+| Legacy era `2024-11-05…2025-11-25` | supported | `initialize` handshake, `ping`, negotiated version |
+| Modern era `2026-07-28` | supported | stateless `server/discover`, per-request `_meta`, `-32022` |
+| `forge_health` | supported | honest component inventory |
+| `forge_workspace_summary` | supported | bounded scan, denylist-aware |
+| `forge_architecture_review` | supported | deterministic rule checks + method limits |
+| `forge_context_read` | supported | `unavailable:no-context-store` when uninitialized |
+| `forge_rules_read` | supported | `untrusted_content` marking |
+| `forge_git_status` | supported | `unavailable:not-a-git-repository` without `.git` |
+| `forge_gh_pr_read` | supported (gated) | needs gh+auth+allowlist+profile; denial is honest |
+| `mcp configure/doctor/status/tools` | supported | idempotent, preserves foreign entries, `--undo` |
+| Live Copilot Chat using the tools | **unverified — requires-approval** | needs authorized Copilot session in permitted env |
+
 ## Known limits (explicit)
 
 - `X-FAB-Principal` is **self-asserted**: anyone holding the pair token can

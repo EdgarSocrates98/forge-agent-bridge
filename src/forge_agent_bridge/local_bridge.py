@@ -22,12 +22,50 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .adapter import BridgeError
-from .contracts import utcnow
+from .contracts import new_id, utcnow
 
 STATE_DIR = Path.home() / ".forge-bridge"
 MAX_BODY = 8 * 1024 * 1024          # 8 MiB request cap (§25.5)
 RATE_LIMIT = 240                    # req/min per credential (§25.5)
 NONCE_WINDOW_S = 60.0               # replay window for X-FAB-Nonce
+
+
+# Scopes a paired device may mint for itself. The master pair token can
+# issue any of these — but never ``admin``, which stays implicit to the
+# master credential only (a minted token must never equal the master).
+_MINTABLE_SCOPES = {
+    "agent", "agent:read", "agent:execute",
+    "session:read", "session:manage",
+    "provider:read",
+    "approval:read", "approval:resolve",
+    "files:read", "files:write",
+    "mcp:read", "mcp:manage",
+    "context:read", "context:manage",
+    "runner:read", "runner:manage",
+    "budget:read", "budget:manage",
+    "device:read", "device:manage",
+}
+
+
+def _nonce_required() -> bool:
+    """``FAB_REQUIRE_NONCE`` opt-in: when set to a truthy value every
+    mutating request must carry a fresh ``X-FAB-Nonce`` (replay window
+    still applies). Off by default — existing local clients that never
+    learned the header keep working; hardened installs opt in."""
+    return os.environ.get("FAB_REQUIRE_NONCE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _err_status(code: str) -> int:
+    """Map FAB-* codes to honest HTTP statuses — an authorization failure
+    must not surface as a 502 upstream error."""
+    return {"FAB-AUTH": 401, "FAB-UNAUTHORIZED": 401,
+            "FAB-FORBIDDEN": 403, "FAB-PERMISSION": 403,
+            "FAB-NOT-FOUND": 404, "FAB-REPLAY": 409,
+            "FAB-APPROVAL-REQUIRED": 409,
+            "FAB-VALIDATION": 422, "FAB-UNSUPPORTED": 422,
+            "FAB-PROVIDER-REQUIRED": 422,
+            "FAB-RATE-LIMIT": 429}.get(code, 502)
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # §30.1 — full-origin allowlist: exact "scheme://host:port" entries may be
 # configured via FAB_ALLOWED_ORIGINS (comma-separated) or established by
@@ -536,10 +574,17 @@ def make_app() -> Any:
             w.append(now)
             return True
 
-        def _replay_ok(self) -> bool:
+        def _replay_ok(self, parts: list[str]) -> bool:
+            """Replay guard. A nonce is always honoured when presented;
+            ``FAB_REQUIRE_NONCE`` additionally *requires* one on mutating
+            methods (POST/PATCH/DELETE). ``/pair/exchange`` stays exempt —
+            it is the bootstrap call that cannot yet hold a session
+            nonce; its credential is the master pair token itself."""
             nonce = self.headers.get("X-FAB-Nonce")
             if not nonce:
-                return True
+                return not (_nonce_required()
+                            and self.command in ("POST", "PATCH", "DELETE")
+                            and parts != ["pair", "exchange"])
             now = time.time()
             for k, ts in list(seen_nonces.items()):
                 if now - ts > NONCE_WINDOW_S:
@@ -560,21 +605,28 @@ def make_app() -> Any:
             if not self._rate_ok(cred):
                 return self._send(429, {"error": {
                     "code": "FAB-RATE-LIMIT", "message": "rate limit"}})
-            if not self._replay_ok():
+            parts = [p for p in urlparse(self.path).path.split("/") if p]
+            if not self._replay_ok(parts):
                 return self._send(409, {"error": {
-                    "code": "FAB-REPLAY", "message": "nonce replay"}})
+                    "code": "FAB-REPLAY",
+                    "message": "nonce required or already used"}})
             if not self._origin_ok():
                 return self._send(403, {"error": {
                     "code": "FAB-FORBIDDEN", "message": "origin rejected"}})
-            parts = [p for p in urlparse(self.path).path.split("/") if p]
             # -- unauthenticated pairing exchange (localhost only) ---------
             if parts == ["pair", "exchange"] and self.command == "POST":
                 try:
                     b = self._body()
+                    req_scopes = tuple(
+                        str(s) for s in (b.get("scopes") or ("agent",)))
+                    # clamp to the mintable vocabulary — a device may not
+                    # mint unknown scopes nor "admin" (master-only)
+                    scopes = tuple(
+                        s for s in req_scopes if s in _MINTABLE_SCOPES)
                     out = pairing.exchange(
                         str(b.get("pair_token", "")),
                         str(b.get("device_name", "")),
-                        tuple(b.get("scopes") or ("agent",)))
+                        scopes or ("agent",))
                     return self._send(201, out)
                 except BridgeError as e:
                     return self._send(403 if "FORBIDDEN" in e.code else 422,
@@ -1015,6 +1067,10 @@ def make_app() -> Any:
                 if self.command == "POST" and len(parts) == 1:
                     from .context import MCPServerDescriptor
                     d = MCPServerDescriptor.model_validate(body)
+                    if d.trust != "unverified":
+                        # trust is earned, never self-declared — a client
+                        # cannot register a server as "verified" verbatim
+                        d = d.model_copy(update={"trust": "unverified"})
                     audit.emit("mcp.register", auth.get("actor", "local"),
                                server_id=d.server_id)
                     return self._send(201, mcp_fed.register(d))
@@ -1098,8 +1154,14 @@ def make_app() -> Any:
                 return self._send(404, {"error": {"code": "FAB-NOT-FOUND",
                                                 "message": "context route"}})
             if self.command == "GET" and parts == ["audit"]:
+                try:
+                    tail = int(self.headers.get("X-Tail", "50"))
+                except ValueError:
+                    return self._send(422, {"error": {
+                        "code": "FAB-VALIDATION",
+                        "message": "X-Tail must be an integer"}})
                 return self._send(200, {"items": audit.tail(
-                    int(self.headers.get("X-Tail", "50")))})
+                    max(1, min(tail, 1000)))})
             if self.command == "POST" and parts == ["sessions"]:
                 # §25.2 — typed ops only; the client never supplies argv.
                 op = str(body.get("op", ""))
@@ -1117,9 +1179,13 @@ def make_app() -> Any:
                     return self._send(422, {"error": {
                         "code": getattr(e, "code", "FAB-VALIDATION"),
                         "message": f"unknown provider {provider!r}"}})
-                from .contracts import new_id
+                cwd = Path(str(body.get("cwd") or "."))
+                if not cwd.is_dir():
+                    return self._send(422, {"error": {
+                        "code": "FAB-VALIDATION",
+                        "message": "cwd must be an existing directory"}})
                 sid = new_id("ses")
-                supervisor.spawn(sid, argv, cwd=body.get("cwd", "."))
+                supervisor.spawn(sid, argv, cwd=str(cwd))
                 return self._send(201, {"session_id": sid,
                                         "provider": provider})
             if self.command == "POST" and parts == ["agent-sessions"]:
@@ -1133,28 +1199,23 @@ def make_app() -> Any:
                     local_load = sum(
                         len(o.sessions) for o in orchs.values())
                     runners.place(runner, local_load=local_load)
-                    s = _orch(provider).create_session(
-                        product_id=body.get("product_id"),
-                        workspace_id=body.get("workspace_id"),
-                        model=body.get("model"),
-                        mcp_servers=body.get("mcp_servers"))
-                    meta.upsert(s.id, provider=provider,
-                                product_id=s.product_id,
-                                workspace_id=s.workspace_id,
-                                title=body.get("title") or "")
-                    collab.share(s.id,
-                                 owner=_principal(auth, s.id, self.headers),
-                                 visibility=body.get("visibility", "private"))
-                    # §27.1 — bind forge/ProductAgentSessionContext/v2
+                    # §MCP-AUTH-ORDER — authorization runs strictly BEFORE
+                    # spawn: identity → context → per-server MCP check →
+                    # approved list → create_session. A denied MCP server
+                    # must never reach the provider adapter's spawn params
+                    # (previously the raw client list was forwarded and the
+                    # denial was only reported afterwards).
+                    pre_sid = new_id("ses")
+                    principal = _principal(auth, pre_sid, self.headers)
                     from .context import ProductAgentSessionContext
                     sc = body.get("context") or {}
                     sc_ctx = ProductAgentSessionContext.model_validate({
                         **sc,
-                        "identity": _principal(auth, s.id, self.headers),
+                        "identity": principal,
                         "provider": provider,
-                        "session_id": s.id,
-                        "product_id": sc.get("product_id") or s.product_id,
-                        "workspace_id": sc.get("workspace_id") or s.workspace_id,
+                        "session_id": pre_sid,
+                        "product_id": sc.get("product_id") or body.get("product_id"),
+                        "workspace_id": sc.get("workspace_id") or body.get("workspace_id"),
                     })
                     # §30.2/§5.4 — server-side product authorization:
                     # ask Product Forge to issue the bound context so
@@ -1163,15 +1224,54 @@ def make_app() -> Any:
                     # controls fail-closed vs honest-unverified.
                     if sc_ctx.product_id:
                         sc_ctx = _pf_authorize(
-                            sc_ctx, s.id, provider,
-                            _principal(auth, s.id, self.headers),
+                            sc_ctx, pre_sid, provider, principal,
                             meta, pf_client)
-                    ctxs.bind(s.id, sc_ctx)
-                    # §27.5 — requested MCP servers are filtered through the
-                    # federated registry + context allowlist (honest denial)
+                    # §27.5 — each requested MCP server is filtered through
+                    # the federated registry + context allowlist. Entries
+                    # may be registry ids (str) or inline descriptors
+                    # (dict); only approved entries are forwarded.
                     req_mcp = body.get("mcp_servers") or []
-                    denied_mcp = [m for m in req_mcp
-                                  if not mcp_fed.allowed_for(sc_ctx, m)]
+                    approved_mcp: list[Any] = []
+                    denied_mcp: list[Any] = []
+                    for m in req_mcp:
+                        m_id = (m if isinstance(m, str) else str(
+                            m.get("name") or m.get("server_id") or ""))
+                        if m_id and mcp_fed.allowed_for(sc_ctx, m_id):
+                            approved_mcp.append(m)
+                        else:
+                            denied_mcp.append(m)
+                    if denied_mcp:
+                        # audit denial without copying server configs —
+                        # inline descriptors could carry env/credentials
+                        audit.emit("mcp.denied", principal,
+                                   session=pre_sid,
+                                   servers=[m if isinstance(m, str) else str(
+                                       m.get("name") or m.get("server_id")
+                                       or "?") for m in denied_mcp])
+                    s = _orch(provider).create_session(
+                        session_id=pre_sid,
+                        product_id=body.get("product_id"),
+                        workspace_id=body.get("workspace_id"),
+                        model=body.get("model"),
+                        mcp_servers=approved_mcp)
+                    if s.id != pre_sid:
+                        # adapter ignored the id hint — re-home the
+                        # provisional context/meta onto the real id so no
+                        # ghost records remain under the provisional one
+                        sc_ctx = sc_ctx.model_copy(
+                            update={"session_id": s.id})
+                        prov = meta.get(pre_sid)
+                        for k, v in prov.items():
+                            if k not in ("created_at", "updated_at"):
+                                meta.upsert(s.id, **{k: v})
+                        meta.delete(pre_sid)
+                    meta.upsert(s.id, provider=provider,
+                                product_id=s.product_id,
+                                workspace_id=s.workspace_id,
+                                title=body.get("title") or "")
+                    collab.share(s.id, owner=principal,
+                                 visibility=body.get("visibility", "private"))
+                    ctxs.bind(s.id, sc_ctx)
                     meta.upsert(s.id, context_version=sc_ctx.context_version,
                                 policy_version=sc_ctx.policy_version)
                     audit.emit("session.create",
@@ -1187,9 +1287,14 @@ def make_app() -> Any:
                         out["mcp_denied"] = denied_mcp
                     return self._send(201, out)
                 except Exception as e:  # noqa: BLE001 — adapter errors vary; map to typed envelope
+                    # a spawn failure after pf_authorize/meta writes must not
+                    # leave a ghost record for a session that never started
+                    with contextlib.suppress(Exception):
+                        meta.delete(pre_sid)
                     code = getattr(e, "code", "FAB-ERROR")
-                    return self._send(502, {"error": {"code": code,
-                                                    "message": str(e)}})
+                    return self._send(_err_status(code),
+                                      {"error": {"code": code,
+                                                 "message": str(e)}})
             if self.command == "GET" and parts == ["agent-sessions"]:
                 store = meta.list(include_archived=True)
                 live: dict[str, Any] = {}

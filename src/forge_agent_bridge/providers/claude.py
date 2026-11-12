@@ -22,6 +22,7 @@ from typing import Any, ClassVar
 from ..adapter import (
     ProviderUnavailableError,
     SessionError,
+    scrub_env,
 )
 from ..contracts import AgentSession, SessionState, new_id
 
@@ -168,7 +169,7 @@ class ClaudeAdapter:
         else:
             cmd += ["--session-id", session_uuid]
         try:
-            env = os.environ.copy()
+            env = scrub_env()
             if self.auth_mode() == "bedrock":
                 env["CLAUDE_CODE_USE_BEDROCK"] = "1"
             return subprocess.Popen(
@@ -181,7 +182,8 @@ class ClaudeAdapter:
     def create_session(self, **kw: Any) -> AgentSession:
         self.initialize()
         import uuid
-        s = AgentSession(id=new_id("ses"), provider="claude-code",
+        s = AgentSession(id=str(kw.get("session_id") or new_id("ses")),
+                         provider="claude-code",
                          model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),

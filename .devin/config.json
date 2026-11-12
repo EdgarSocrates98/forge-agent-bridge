@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(forge-bridge --version)",
+      "Exec(forge-bridge doctor)",
+      "Exec(forge-bridge obsidian status)",
+      "Exec(forge-bridge obsidian scan)",
+      "Exec(forge-bridge obsidian preview)",
+      "Exec(forge-bridge obsidian sync-plan)",
+      "Exec(forge-bridge obsidian history)"
+    ]
+  }
+}

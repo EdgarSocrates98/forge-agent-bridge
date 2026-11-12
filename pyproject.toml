@@ -34,3 +34,5 @@ src = ["src", "tests"]
 "src/forge_agent_bridge/ui/**/*.py" = ["ALL"]
 # Vendored forge_obsidian engine — byte-parity; linted in the canonical repo.
 "src/forge_agent_bridge/_forge_obsidian/**" = ["ALL"]
+# Vendored bootstrap (canonical: the-forge/scripts/installkit) — byte-parity.
+"scripts/forge_bootstrap.py" = ["ALL"]

@@ -31,9 +31,9 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import venv
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -899,9 +899,9 @@ def register(
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def detect_hosts() -> dict[str, Any]:

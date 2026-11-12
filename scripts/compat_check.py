@@ -36,7 +36,7 @@ def _pyproject_version(repo: Path) -> str | None:
     if not f.exists():
         return None
     text = f.read_text()
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     if m:
         return m.group(1)
     # dynamic version via [tool.hatch.version] path → __init__.__version__
@@ -66,11 +66,11 @@ def _cli_version(exe: str) -> str | None:
     for args in ([exe, "--version"], [exe, "version"]):
         try:
             out = subprocess.run(args, capture_output=True, text=True,
-                                 timeout=10)
+                                 timeout=10, check=False)
             line = (out.stdout or out.stderr).strip().splitlines()
             if line and line[0].strip():
                 return line[0].strip()[:60]
-        except Exception:  # noqa: BLE001 — detection only
+        except Exception:  # noqa: BLE001,S112 — detection only
             continue
     return "installed (version unknown)"
 

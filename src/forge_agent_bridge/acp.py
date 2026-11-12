@@ -14,7 +14,7 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-from .adapter import BridgeError, ProviderUnavailableError
+from .adapter import BridgeError, ProviderUnavailableError, scrub_env
 
 _ids = itertools.count(1)
 PROTOCOL_VERSION = 1
@@ -38,7 +38,7 @@ class AcpClient:
         try:
             self.proc = subprocess.Popen(
                 self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL)
+                stderr=subprocess.DEVNULL, env=scrub_env())
         except FileNotFoundError as exc:
             raise ProviderUnavailableError(f"agent executable not found: {self.cmd[0]}") from exc
         self._reader = threading.Thread(target=self._read_loop, daemon=True)

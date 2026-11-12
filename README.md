@@ -27,7 +27,36 @@ ecosystem. Architectural decision: [docs/adr/ADR-001-repo-and-architecture.md](d
 | **Handoff** | `remote` / `provider-resume` / `context-rebuild` — never claims unverifiable continuity |
 | **File service** | path-scoped, traversal-safe list/preview/download/upload; writes are approval-gated with versioned snapshots + restore |
 | **Artifacts** | per-session artifact listing via adapters |
-| **MCP config** | `mcp_servers` on session create, passed through to providers |
+| **MCP config** | `mcp_servers` on session create, authorized *before* provider spawn |
+| **Native MCP server** | `forge-bridge mcp serve` — stdio JSON-RPC, 7 read-only tools, dual-era protocol (2025-11-25 + 2026-07-28), 3 security profiles |
+
+## Native MCP server (GitHub Copilot, etc.)
+
+`forge-bridge mcp serve` runs a **stdlib-only** MCP stdio server — no
+Node, no Copilot CLI, no third-party MCP server. It exposes seven
+read-only tools (`forge_health`, `forge_workspace_summary`,
+`forge_architecture_review`, `forge_context_read`, `forge_rules_read`,
+`forge_git_status`, `forge_gh_pr_read`) behind a workspace trust
+boundary and three fail-closed profiles (`corporate-readonly` default,
+`local-readonly`, `standard`).
+
+```bash
+forge-bridge mcp serve --workspace .            # stdio server
+forge-bridge mcp configure --workspace .        # write host config (mcp.json/.vscode)
+forge-bridge mcp doctor --workspace .           # honest readiness checks
+forge-bridge mcp status                          # where entries exist
+forge-bridge mcp tools                           # the catalog
+```
+
+Docs: [MCP_NATIVE_ARCHITECTURE](docs/MCP_NATIVE_ARCHITECTURE.md) ·
+[PROTOCOL_COMPATIBILITY](docs/MCP_PROTOCOL_COMPATIBILITY.md) ·
+[CORPORATE_SECURITY](docs/MCP_CORPORATE_SECURITY.md) ·
+[CORPORATE_INSTALLATION](docs/MCP_CORPORATE_INSTALLATION.md) ·
+[VSCODE_INTEGRATION](docs/MCP_VSCODE_INTEGRATION.md) ·
+[TOOL_CATALOG](docs/MCP_TOOL_CATALOG.md) ·
+[THREAT_MODEL](docs/MCP_THREAT_MODEL.md) ·
+[HOMOLOGATION](docs/MCP_HOMOLOGATION.md) ·
+[TROUBLESHOOTING](docs/MCP_TROUBLESHOOTING.md)
 
 ## Honest capability states
 

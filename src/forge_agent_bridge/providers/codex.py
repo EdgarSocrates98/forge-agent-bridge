@@ -20,6 +20,7 @@ from ..adapter import (
     ProviderUnavailableError,
     SessionError,
     UnsupportedCapabilityError,
+    scrub_env,
 )
 from ..contracts import AgentSession, SessionState, new_id
 
@@ -128,7 +129,8 @@ class CodexAdapter:
         if kw.get("mcp_servers"):
             raise UnsupportedCapabilityError(
                 "mcp_servers (use ~/.codex/config.toml)", provider="codex")
-        s = AgentSession(id=new_id("ses"), provider="codex",
+        s = AgentSession(id=str(kw.get("session_id") or new_id("ses")),
+                         provider="codex",
                          model=kw.get("model"),
                          product_id=kw.get("product_id"),
                          workspace_id=kw.get("workspace_id"),
@@ -170,7 +172,8 @@ class CodexAdapter:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=False,
-                cwd=self._cwd(), start_new_session=True)
+                cwd=self._cwd(), start_new_session=True,
+                env=scrub_env())
         except FileNotFoundError as exc:
             raise ProviderUnavailableError("codex not on PATH",
                                            provider="codex") from exc

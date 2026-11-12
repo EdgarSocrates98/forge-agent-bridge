@@ -27,6 +27,15 @@ MCP_SCHEMA = "forge/MCPServerDescriptor/v1"
 KNOWLEDGE_CONTEXT_PACK_SCHEMA = "theforge/KnowledgeContextPack/v1"
 
 
+def _chmod_private(path: Path) -> None:
+    """Best-effort 0600 on state files that carry context/registry data."""
+    try:
+        import os
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 class ProductAgentSessionContext(BaseModel):
     """forge/ProductAgentSessionContext/v2 — session context binding.
 
@@ -149,6 +158,7 @@ class ContextStore:
     def bind(self, session_id: str, ctx: ProductAgentSessionContext) -> None:
         self._data[session_id] = ctx.model_dump(mode="json", by_alias=True)
         self._ctx.write_text(json.dumps(self._data, indent=1))
+        _chmod_private(self._ctx)
 
     def get(self, session_id: str) -> dict[str, Any] | None:
         return self._data.get(session_id)
@@ -164,6 +174,7 @@ class ContextStore:
             raise BridgeError("FAB-NOT-FOUND", "no context bound to session")
         d["trust"] = "revoked"
         self._ctx.write_text(json.dumps(self._data, indent=1))
+        _chmod_private(self._ctx)
         return dict(d)
 
     def assert_allowed(self, session_id: str, *, tool: str | None = None,
@@ -267,6 +278,7 @@ class ContextStore:
         with self._delta.open("a") as f:
             f.write(json.dumps(delta.model_dump(mode="json",
                                                 by_alias=True)) + "\n")
+        _chmod_private(self._delta)
 
     def deltas(self, product_id: str | None = None,
                review: str | None = None) -> list[dict[str, Any]]:
@@ -311,6 +323,7 @@ class MCPFederation:
 
     def _save(self) -> None:
         self._file.write_text(json.dumps(self._data, indent=1))
+        _chmod_private(self._file)
 
     def register(self, d: MCPServerDescriptor) -> dict[str, Any]:
         self._data[d.server_id] = d.model_dump(mode="json", by_alias=True)

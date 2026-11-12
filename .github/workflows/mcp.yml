@@ -1,0 +1,99 @@
+name: mcp
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol-and-security:
+    name: MCP protocol + security (${{ matrix.os }} py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Lint MCP surface
+        run: |
+          pip install ruff
+          python -m ruff check src/forge_agent_bridge/mcp tests/test_mcp_*.py
+      - name: MCP tests (no third-party deps needed)
+        env:
+          PYTHONPATH: src
+        run: |
+          pip install pytest
+          python -m pytest tests/test_mcp_protocol.py tests/test_mcp_security.py tests/test_mcp_config.py -q
+
+  stdio-e2e:
+    name: stdio E2E (offline, stdout purity)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: E2E via subprocess
+        env:
+          PYTHONPATH: src
+        run: |
+          pip install pytest
+          python -m pytest tests/test_mcp_e2e.py -q
+      - name: Stdout purity — discover over stdio
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' \
+            | python -m forge_agent_bridge.mcp --workspace . \
+            | python -c "import sys,json; m=json.loads(sys.stdin.readline()); \
+                assert m['result']['resultType']=='complete'"
+      - name: Stdout purity — legacy handshake
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' \
+            | python -m forge_agent_bridge.mcp --workspace . \
+            | python -c "import sys,json; m=json.loads(sys.stdin.readline()); \
+                assert m['result']['protocolVersion']=='2025-11-25'"
+
+  packaging:
+    name: wheel + offline launch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Build + inspect wheel
+        run: |
+          pip install build
+          python -m build --wheel
+          python -c "import zipfile,glob; \
+              names=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); \
+              assert any('forge_agent_bridge/mcp/' in n for n in names), 'mcp missing from wheel'; \
+              print(len(names), 'files in wheel')"
+      - name: Offline launch — no network, stdlib path
+        env:
+          PYTHONPATH: src
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' \
+            | python -m forge_agent_bridge.mcp --workspace . \
+            | python -c "import sys,json; json.loads(sys.stdin.readline())"
+      - name: Manifest valid
+        run: |
+          python -c "import json; m=json.load(open('src/forge_agent_bridge/forge.agentic.json')); assert m['mcp_command']==['{cli}','mcp','serve']; r=json.load(open('forge.agentic.json')); assert r==m"

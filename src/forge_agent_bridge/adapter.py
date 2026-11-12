@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from typing import Any, Protocol, runtime_checkable
 
 from .contracts import AgentSession, ProviderDescriptor
+
+# Environment keys that must never leak into provider child processes —
+# bridge-internal secrets and credentials (the child provider is a separate
+# trust boundary; it needs its own auth, not ours).
+_SCRUB_ENV_PREFIXES = ("FAB_SECRET_",)
+_SCRUB_ENV_KEYS = {"FAB_PF_TOKEN", "FAB_BRIDGE_TOKEN", "FAB_PAIR_TOKEN",
+                   "FAB_MASTER_TOKEN"}
+
+
+def scrub_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Provider-spawn environment: inherits the process env minus bridge
+    secrets (``FAB_SECRET_*`` and token material)."""
+    env = dict(base if base is not None else os.environ)
+    for k in list(env):
+        if k in _SCRUB_ENV_KEYS or any(
+                k.startswith(p) for p in _SCRUB_ENV_PREFIXES):
+            del env[k]
+    return env
 
 
 class BridgeError(Exception):

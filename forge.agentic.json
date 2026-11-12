@@ -75,19 +75,22 @@
       "id": "bridge-context-guardian",
       "kind": "agent",
       "location": "src/forge_agent_bridge/installation/assets/agents/bridge-context-guardian.md",
-      "resource_class": "agentic"
+      "resource_class": "agentic",
+      "packaged_location": "installation/assets/agents/bridge-context-guardian.md"
     },
     {
       "id": "bridge-event-auditor",
       "kind": "agent",
       "location": "src/forge_agent_bridge/installation/assets/agents/bridge-event-auditor.md",
-      "resource_class": "agentic"
+      "resource_class": "agentic",
+      "packaged_location": "installation/assets/agents/bridge-event-auditor.md"
     },
     {
       "id": "bridge-session-governor",
       "kind": "agent",
       "location": "src/forge_agent_bridge/installation/assets/agents/bridge-session-governor.md",
-      "resource_class": "agentic"
+      "resource_class": "agentic",
+      "packaged_location": "installation/assets/agents/bridge-session-governor.md"
     }
   ]
 }

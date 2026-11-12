@@ -8,28 +8,40 @@
     {
       "id": "status",
       "mode": "DIAGNOSTIC_ONLY",
-      "command": ["{cli}", "status"],
+      "command": [
+        "{cli}",
+        "status"
+      ],
       "description": "Report bridge status and detected provider inventory",
       "read_only": true
     },
     {
       "id": "providers",
       "mode": "DIAGNOSTIC_ONLY",
-      "command": ["{cli}", "providers"],
+      "command": [
+        "{cli}",
+        "providers"
+      ],
       "description": "Report the provider capability matrix",
       "read_only": true
     },
     {
       "id": "doctor",
       "mode": "DIAGNOSTIC_ONLY",
-      "command": ["{cli}", "doctor"],
+      "command": [
+        "{cli}",
+        "doctor"
+      ],
       "description": "Diagnose executables, versions and honest auth states",
       "read_only": true
     },
     {
       "id": "sessions",
       "mode": "DIAGNOSTIC_ONLY",
-      "command": ["{cli}", "sessions"],
+      "command": [
+        "{cli}",
+        "sessions"
+      ],
       "description": "List registered adapter sessions",
       "read_only": true
     }
@@ -40,11 +52,42 @@
     "bridge-event-auditor",
     "bridge-context-guardian"
   ],
-  "agent_roster_paths": ["src/forge_agent_bridge/installation/assets/agents"],
+  "agent_roster_paths": [
+    "src/forge_agent_bridge/installation/assets/agents"
+  ],
   "coordinators": [],
-  "mcp_command": ["{cli}", "mcp", "serve"],
-  "host_adapters": ["claude", "codex", "devin", "copilot"],
+  "mcp_command": [
+    "{cli}",
+    "mcp",
+    "serve"
+  ],
+  "host_adapters": [
+    "claude",
+    "codex",
+    "devin",
+    "copilot"
+  ],
   "read_only_default": true,
   "requires_credentials": false,
-  "requires_network": false
+  "requires_network": false,
+  "resources": [
+    {
+      "id": "bridge-context-guardian",
+      "kind": "agent",
+      "location": "src/forge_agent_bridge/installation/assets/agents/bridge-context-guardian.md",
+      "resource_class": "agentic"
+    },
+    {
+      "id": "bridge-event-auditor",
+      "kind": "agent",
+      "location": "src/forge_agent_bridge/installation/assets/agents/bridge-event-auditor.md",
+      "resource_class": "agentic"
+    },
+    {
+      "id": "bridge-session-governor",
+      "kind": "agent",
+      "location": "src/forge_agent_bridge/installation/assets/agents/bridge-session-governor.md",
+      "resource_class": "agentic"
+    }
+  ]
 }

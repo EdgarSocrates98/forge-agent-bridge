@@ -95,7 +95,5 @@ jobs:
             | python -m forge_agent_bridge.mcp --workspace . \
             | python -c "import sys,json; json.loads(sys.stdin.readline())"
       - name: Manifest valid
-        run: python -c "import json; \
-            m=json.load(open('src/forge_agent_bridge/forge.agentic.json')); \
-            assert m['mcp_command']==['{cli}','mcp','serve']; \
-            r=json.load(open('forge.agentic.json')); assert r==m"
+        run: |
+          python -c "import json; m=json.load(open('src/forge_agent_bridge/forge.agentic.json')); assert m['mcp_command']==['{cli}','mcp','serve']; r=json.load(open('forge.agentic.json')); assert r==m"

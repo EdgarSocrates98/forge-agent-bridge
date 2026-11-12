@@ -74,7 +74,10 @@ def _is_reparse(path: Path) -> bool:
     attrs = getattr(st, "st_file_attributes", 0)
     if attrs and attrs & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
         return True
-    return os.path.isjunction(path)
+    isjunction = getattr(os.path, "isjunction", None)
+    if isjunction is None:  # Python < 3.12: no junction API
+        return False
+    return isjunction(path)
 
 
 def _is_symlink(path: Path) -> bool:

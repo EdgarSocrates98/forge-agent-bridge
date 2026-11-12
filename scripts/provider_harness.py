@@ -138,7 +138,12 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded, encoding="utf-8")
     print(encoded, end="")
-    return 0 if all(row["status"] == "passed" for row in rows) else 2
+    # `error` rows are harness/adapter failures (crash, timeout, no events) —
+    # those are the regressions this matrix exists to catch, so they fail the
+    # job. `blocked` (missing auth) and `unavailable` (CLI not installed) are
+    # environment states the artifact reports truthfully; a nightly run with
+    # no provider credentials must surface them without staying red forever.
+    return 2 if any(row["status"] == "error" for row in rows) else 0
 
 
 if __name__ == "__main__":

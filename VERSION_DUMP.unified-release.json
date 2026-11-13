@@ -1,0 +1,9 @@
+{
+  "cycle": "unified-release",
+  "repository": "forge-agent-bridge",
+  "version": "0.2.4",
+  "tag": "v0.2.4",
+  "source_commit": "e64af2cadcb2d957dd7c64ab1f6f55a8099534bb",
+  "version_source": "pyproject.toml|package.json|__init__",
+  "verified_at": "2026-11-12"
+}

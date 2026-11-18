@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, ClassVar
 
 from ..adapter import (
@@ -82,7 +81,9 @@ class ClaudeAdapter:
         mode = os.environ.get("FORGE_CLAUDE_AUTH_MODE", "").lower()
         if not mode:
             try:
-                cfg = json.loads((Path.home() / ".forge-bridge" / "provider-config.json").read_text())
+                from ..local_bridge import resolve_state_dir
+                cfg = json.loads(
+                    (resolve_state_dir() / "provider-config.json").read_text())
                 mode = str(cfg.get("claude", {}).get("auth_mode", "subscription")).lower()
             except (OSError, json.JSONDecodeError):
                 mode = "subscription"

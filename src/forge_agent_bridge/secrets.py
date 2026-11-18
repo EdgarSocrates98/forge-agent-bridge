@@ -112,5 +112,7 @@ def secret_store(prefer: str = "auto",
                 raise
     if prefer in ("auto", "env"):
         return EnvSecretStore()
-    return FileSecretStore(state_dir or
-                           Path.home() / ".forge-bridge" / "secrets.json")
+    if state_dir is None:
+        from .local_bridge import resolve_state_dir
+        state_dir = resolve_state_dir() / "secrets.json"
+    return FileSecretStore(state_dir)

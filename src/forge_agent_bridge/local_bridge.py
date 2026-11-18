@@ -77,14 +77,25 @@ _ALLOWED_ORIGINS: set[str] = {
 }
 
 
+def resolve_state_dir() -> Path:
+    """The bridge state directory WITHOUT side effects:
+    ``FAB_STATE_DIR`` when set (a scoped install's state root), else the
+    account default ``~/.forge-bridge`` (``STATE_DIR``). Use this for
+    read-only lookups; use ``state_dir()`` when the dir must exist."""
+    override = os.environ.get("FAB_STATE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return STATE_DIR
+
+
 def state_dir() -> Path:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    sd = resolve_state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
     # providers that demand a trusted cwd (e.g. codex exec) run their
     # turns inside state_dir/provider-work/<provider> — see CodexAdapter.
-    import os
     os.environ.setdefault("FAB_PROVIDER_WORKDIR",
-                          str(STATE_DIR / "provider-work"))
-    return STATE_DIR
+                          str(sd / "provider-work"))
+    return sd
 
 
 def pair_token() -> str:
@@ -615,6 +626,7 @@ def make_app() -> Any:
                     "code": "FAB-FORBIDDEN", "message": "origin rejected"}})
             # -- unauthenticated pairing exchange (localhost only) ---------
             if parts == ["pair", "exchange"] and self.command == "POST":
+                b: dict[str, Any] = {}
                 try:
                     b = self._body()
                     req_scopes = tuple(
@@ -627,8 +639,18 @@ def make_app() -> Any:
                         str(b.get("pair_token", "")),
                         str(b.get("device_name", "")),
                         scopes or ("agent",))
+                    # audit the mint — device identity only, never a token
+                    dev = out.get("device") or {}
+                    audit.emit("pair.exchange",
+                               str(dev.get("device_name") or "device"),
+                               device=dev.get("device_id"),
+                               scopes=dev.get("scopes"))
                     return self._send(201, out)
                 except BridgeError as e:
+                    audit.emit("pair.exchange.denied",
+                               str(b.get("device_name") or "device")
+                               if isinstance(b, dict) else "device",
+                               outcome=e.code)
                     return self._send(403 if "FORBIDDEN" in e.code else 422,
                                       {"error": {"code": e.code,
                                                  "message": e.message}})
@@ -770,7 +792,7 @@ def make_app() -> Any:
                 if mode not in {"subscription", "bedrock"}:
                     return self._send(422, {"error": {"code": "FAB-VALIDATION",
                                                        "message": "mode must be subscription or bedrock"}})
-                cfg_path = STATE_DIR / "provider-config.json"
+                cfg_path = state_dir() / "provider-config.json"
                 cfg_path.parent.mkdir(parents=True, exist_ok=True)
                 cfg_path.write_text(json.dumps({"claude": {"auth_mode": mode}}) + "\n")
                 try:
@@ -922,10 +944,23 @@ def make_app() -> Any:
                         tmp.write_text(str(out["pair_token"]), encoding="utf-8")
                         os.chmod(tmp, 0o600)
                         os.replace(tmp, token_path)
-                        out["token_preview"] = __import__("hashlib").sha256(
+                        preview = __import__("hashlib").sha256(
                             str(out["pair_token"]).encode()).hexdigest()[:12]
-                        return self._send(200, out)
+                        audit.emit("pair.rotate",
+                                   auth.get("actor", "local"),
+                                   token_preview=preview)
+                        # The new master is written to the 0600 token file —
+                        # the response carries the path + hash, never the
+                        # token itself (callers holding the old master can
+                        # already read the file; fewer copies in flight).
+                        return self._send(200, {
+                            "rotated": True,
+                            "pair_token_path": str(token_path),
+                            "token_preview": preview})
                     except BridgeError as e:
+                        audit.emit("pair.rotate.denied",
+                                   auth.get("actor", "local"),
+                                   outcome=e.code)
                         return self._send(
                             403 if "FORBIDDEN" in e.code else 422,
                             {"error": {"code": e.code,

@@ -5,7 +5,9 @@ the shared ui/kit wizard drives scope -> install profile -> components
 -> real dry-run plan -> confirm -> apply -> doctor, every step
 cancellable with Esc/q. Bridge-honest differences: no host payloads
 and no gateway profile (a localhost service, not a content forge), so
-those steps are skipped by passing empty vocabularies to the wizard.
+those steps are skipped by passing empty vocabularies to the wizard —
+the flags still exist for the the-forge delegation surface and are
+recorded on the receipt as accepted-and-ignored.
 """
 from __future__ import annotations
 
@@ -38,21 +40,18 @@ def _tty() -> bool:
 def _install(**kw: Any) -> dict[str, Any]:
     """Map the wizard's keyword contract onto the real lifecycle.
 
-    ``host``/``gateway_profile`` are accepted and ignored — the bridge
-    installs no host payloads and has no execution profile.
+    ``host``/``gateway_profile`` are forwarded for honest recording —
+    the bridge installs no host payloads and runs no execution profile.
     """
-    receipt = lifecycle.install(
+    return lifecycle.install(
         scope=kw.get("scope", "user"),
         profile=kw.get("profile", "recommended"),
         components=kw.get("components"),
         dry_run=bool(kw.get("dry_run")),
         yes=bool(kw.get("yes")),
+        host=kw.get("host"),
+        gateway_profile=kw.get("gateway_profile"),
     )
-    # The receipt schema has no lifecycle status; the wizard's
-    # completed/planned channel is added here, not in the stored doc.
-    if kw.get("dry_run"):
-        return {**receipt, "status": "planned"}
-    return {**receipt, "status": "completed"}
 
 
 def _doctor(**kw: Any) -> dict[str, Any]:
@@ -86,13 +85,19 @@ def run_guided_install() -> int:
 
 def run_flag_install(*, scope: str, profile: str,
                      components: str | None, root: str | None,
-                     dry_run: bool, yes: bool) -> dict[str, Any]:
+                     dry_run: bool, yes: bool,
+                     host: str | None = None,
+                     gateway_profile: str | None = None) -> dict[str, Any]:
     comps = (tuple(c.strip() for c in components.split(",") if c.strip())
              if components else None)
     return lifecycle.install(
         scope=scope, profile=profile, components=comps,
-        root=Path(root) if root else None,
-        dry_run=dry_run, yes=yes)
+        # --root is the install TARGET root (delegation contract): bridge
+        # state always lands under <target>/.forge-bridge — never loose
+        # pair.token/config.json at the target root.
+        root=lifecycle.state_dir_under(Path(root)) if root else None,
+        dry_run=dry_run, yes=yes,
+        host=host, gateway_profile=gateway_profile)
 
 
 def guided_install_available() -> bool:

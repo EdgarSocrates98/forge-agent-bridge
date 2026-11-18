@@ -1,4 +1,5 @@
 """forge-bridge install — lifecycle contract (scope/profile/components)."""
+import json
 import os
 import stat
 
@@ -9,6 +10,8 @@ def test_dry_run_plan_only(tmp_path):
     r = lifecycle.install(scope="user", profile="recommended",
                           root=tmp_path / "fb", dry_run=True)
     assert r["dry_run"] is True and r["applied"] == []
+    assert r["status"] == "planned"
+    assert r["operation"] == "install"
     assert not (tmp_path / "fb").exists()
     targets = [s["target"] for s in r["plan"]]
     assert any("pair.token" in t for t in targets)
@@ -50,7 +53,7 @@ def test_minimal_profile_state_only(tmp_path):
     assert (tmp_path / "fb").is_dir()
     assert not (tmp_path / "fb" / "pair.token").exists()
     assert not (tmp_path / "fb" / "providers.json").exists()
-    assert r["components"] == ["state"]
+    assert r["components"]["selected"] == ["state"]
 
 
 def test_unknown_component_refused(tmp_path):
@@ -88,4 +91,180 @@ def test_scope_project_uses_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     r = lifecycle.install(scope="project", profile="minimal", yes=True)
     # Project roots use the host platform's path separator.
-    assert r["root"] == str(tmp_path / ".forge-bridge")
+    assert r["state_dir"] == str(tmp_path / ".forge-bridge")
+
+
+# ---------------------------------------------------------------------
+# install-2.1 (cycle-16 wave-07) — forge/InstallReceipt/v1 contract
+# ---------------------------------------------------------------------
+
+def test_receipt_v1_envelope(tmp_path):
+    """The receipt the-forge's delegation verifier reads."""
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=tmp_path / "fb", yes=True)
+    assert r["schema"] == "forge/InstallReceipt/v1"
+    assert r["forge_id"] == "forge-agent-bridge"
+    assert r["operation"] == "install"
+    assert r["status"] == "completed"
+    assert r["verification"]["status"] in ("PASS", "UNVERIFIED")
+    assert isinstance(r["managed_files"], list) and r["managed_files"]
+    for f in r["managed_files"]:
+        assert {"path", "sha256", "kind", "action"} <= set(f)
+        assert f["kind"] in ("config", "state")
+    assert isinstance(r["checks"], list) and r["checks"]
+    assert r["receipt_id"].startswith("sha256:")
+    assert r["target_root"] and r["created_at"]
+    # pair TOKEN never reaches the receipt — only its path/hash
+    token = (tmp_path / "fb" / "pair.token").read_text().strip()
+    assert token not in json.dumps(r)
+
+
+def test_dry_run_receipt_v1(tmp_path):
+    r = lifecycle.install(scope="user", root=tmp_path / "fb", dry_run=True)
+    assert r["schema"] == "forge/InstallReceipt/v1"
+    assert r["operation"] == "install" and r["status"] == "planned"
+    assert r["verification"]["status"] == "UNVERIFIED"
+    assert r["planned_files"]
+    assert all(f["path"].startswith("fb/") for f in r["planned_files"])
+
+
+def test_receipt_file_written(tmp_path):
+    """Apply persists the receipt under <state>/receipts/ (delegation
+    fallback evidence — the `.<state>/receipts` convention)."""
+    lifecycle.install(scope="user", profile="recommended",
+                      root=tmp_path / "fb", yes=True)
+    receipts = list((tmp_path / "fb" / "receipts").glob("install-*.json"))
+    assert receipts
+    doc = json.loads(receipts[0].read_text())
+    assert doc["schema"] == "forge/InstallReceipt/v1"
+    assert doc["operation"] == "install" and doc["status"] == "completed"
+
+
+def test_host_gateway_accepted_ignored(tmp_path):
+    r = lifecycle.install(scope="user", root=tmp_path / "fb",
+                          dry_run=True, host="all",
+                          gateway_profile="economy")
+    assert r["host"] is None                      # no host payloads claimed
+    assert r["requested_host"] == "all"
+    assert r["requested_gateway_profile"] == "economy"
+    na = [c for c in r["checks"] if c["status"] == "NOT_APPLICABLE"]
+    assert na and "accepted" in na[0]["detail"]
+
+
+# ---------------------------------------------------------------------
+# --root target semantics (install-2.1) — state under <root>/.forge-bridge
+# ---------------------------------------------------------------------
+
+def test_state_dir_under(tmp_path):
+    assert lifecycle.state_dir_under(tmp_path) == tmp_path / ".forge-bridge"
+    # idempotent — an explicit state dir is never nested under itself
+    sd = tmp_path / ".forge-bridge"
+    assert lifecycle.state_dir_under(sd) == sd
+
+
+def test_cli_root_is_target_not_state(tmp_path):
+    """`forge-bridge install --root <ws>` must never drop pair.token or
+    config.json loose at the workspace root (secret-in-repo violation)."""
+    from forge_agent_bridge.install import cli as icli
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    r = icli.run_flag_install(scope="workspace", profile="recommended",
+                              components=None, root=str(ws),
+                              dry_run=False, yes=True)
+    assert not (ws / "pair.token").exists()
+    assert not (ws / "config.json").exists()
+    sd = ws / ".forge-bridge"
+    assert (sd / "pair.token").exists()
+    assert r["state_dir"] == str(sd) and r["target_root"] == str(ws)
+    # a .gitignore guards the state dir from an enclosing VCS
+    assert (sd / ".gitignore").read_text().strip() == "*"
+
+
+def test_scope_workspace_parent(tmp_path, monkeypatch):
+    (tmp_path / "sub").mkdir()
+    monkeypatch.chdir(tmp_path / "sub")
+    r = lifecycle.install(scope="workspace", profile="minimal", yes=True)
+    assert r["state_dir"] == str(tmp_path / ".forge-bridge")
+
+
+# ---------------------------------------------------------------------
+# uninstall via ledger — only recorded install-owned files
+# ---------------------------------------------------------------------
+
+def test_uninstall_ledger_driven(tmp_path):
+    lifecycle.install(scope="user", profile="full",
+                      root=tmp_path / "fb", yes=True)
+    r = lifecycle.uninstall(scope="user", root=tmp_path / "fb", yes=True)
+    assert r["operation"] == "uninstall"
+    assert "config.json" in r["removed"] and "providers.json" in r["removed"]
+    assert "components.json" in r["removed"]
+
+
+def test_uninstall_keeps_preserved_config(tmp_path):
+    """A config.json that predates the install is user state — write-if-
+    absent preserved it, so the ledger never marks it removable."""
+    root = tmp_path / "fb"
+    root.mkdir(parents=True)
+    (root / "config.json").write_text('{"custom": true}')
+    lifecycle.install(scope="user", profile="full", root=root, yes=True)
+    assert (root / "config.json").read_text() == '{"custom": true}'
+    lifecycle.uninstall(scope="user", root=root, yes=True)
+    assert (root / "config.json").read_text() == '{"custom": true}'
+
+
+def test_uninstall_kept_lists_runtime_files(tmp_path):
+    root = tmp_path / "fb"
+    lifecycle.install(scope="user", profile="recommended",
+                      root=root, yes=True)
+    # runtime files the service creates at serve-time — never install-owned
+    for name in ("pairing.json", "audit.jsonl", "sessions.json",
+                 "secrets.json"):
+        (root / name).write_text("{}")
+    (root / "provider-work").mkdir()
+    r = lifecycle.uninstall(scope="user", root=root, yes=True)
+    for name in ("pairing.json", "audit.jsonl", "sessions.json",
+                 "secrets.json", "provider-work/", "pair.token"):
+        assert name in r["kept"], name
+        assert (root / name.rstrip("/")).exists()
+    assert "events/" in r["kept"] and "backups/" in r["kept"]
+
+
+def test_uninstall_without_ledger_removes_nothing(tmp_path):
+    root = tmp_path / "fb"
+    root.mkdir(parents=True)
+    (root / "providers.json").write_text("{}")
+    r = lifecycle.uninstall(scope="user", root=root, yes=True)
+    assert r["removed"] == [] and (root / "providers.json").exists()
+
+
+# ---------------------------------------------------------------------
+# doctor aggregates — honest provider counts
+# ---------------------------------------------------------------------
+
+def test_doctor_providers_aggregate_dynamic(tmp_path, monkeypatch):
+    lifecycle.install(scope="user", profile="minimal",
+                      root=tmp_path / "fb", yes=True)
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    prov = next(c for c in d["checks"] if c["check"] == "providers-detected")
+    # the registry catalog has 5 entries — no stale hard-coded denominator
+    assert prov["state"].endswith("/5 executables")
+
+
+def test_doctor_zero_executables_not_ok(tmp_path, monkeypatch):
+    lifecycle.install(scope="user", profile="minimal",
+                      root=tmp_path / "fb", yes=True)
+    from forge_agent_bridge.registry import REGISTRY
+
+    class _NoExec:
+        executable = ""
+        kind = "real"
+
+        def model_dump(self, **_):
+            return {}
+
+    monkeypatch.setattr(REGISTRY, "detect_all",
+                        lambda *a, **k: [_NoExec()] * 5)
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    prov = next(c for c in d["checks"] if c["check"] == "providers-detected")
+    assert prov["state"] == "0/5 executables"
+    assert d["overall"] == "incomplete"

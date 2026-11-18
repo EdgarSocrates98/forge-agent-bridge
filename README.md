@@ -122,13 +122,25 @@ Bridge-honest components (a localhost service ships no host payloads):
 | Component | Effect |
 |---|---|
 | `service` | verifies `forge-bridge` on PATH (`unverified` until bootstrap ran) |
-| `state` | `<root>` + `events/` + `backups/` dirs |
-| `pairing` | `<root>/pair.token` 0600 (never rotated silently) |
-| `providers` | `<root>/providers.json` — capability-matrix snapshot |
-| `config` | `<root>/config.json` — seeded limits (rate/quota/retention) |
+| `state` | `<state>` + `events/` + `backups/` dirs |
+| `pairing` | `<state>/pair.token` 0600 (never rotated silently) |
+| `providers` | `<state>/providers.json` — capability-matrix snapshot |
+| `config` | `<state>/config.json` — seeded limits (rate/quota/retention) |
 
-Default state root by scope: `user` → `~/.forge-bridge`,
+State root by scope: `user` → `~/.forge-bridge` (or `$FAB_STATE_DIR`),
 `project` → `./.forge-bridge`, `workspace` → `<parent>/.forge-bridge`.
+`--root <dir>` is a **target root**: state goes under
+`<dir>/.forge-bridge`, never loose at the workspace root.
+
+Every install/apply/dry-run/uninstall writes a
+`forge/InstallReceipt/v1` under `<state>/receipts/` — the envelope The
+Forge's delegated verification consumes (`operation`, `status`,
+`verification.status`). The master pair token is never embedded in
+receipts, logs or audit records — only its path and hash-prefix.
+
+`forge-bridge serve --state-dir <dir>` (or `$FAB_STATE_DIR`) points the
+runtime at a scoped state root, so `project`/`workspace` installs are
+actually servable — not merely declared.
 
 ### Dev
 
@@ -142,15 +154,19 @@ No dependencies beyond Python 3.11+ (`typer`, `pydantic`).
 ## Quickstart
 
 ```bash
-# 1. Pair — creates ~/.forge-bridge/pair.token (0600)
-forge-bridge pair
+# 1. Serve the local bridge (127.0.0.1 only) — mints
+#    ~/.forge-bridge/pair.token (0600) on first run
+forge-bridge serve --port 8787
 
-# 2. Diagnostics — providers detected, auth states
+# 2. Pair a device — real /pair/exchange against the running bridge;
+#    mints a scoped session token (master token stays in the state dir)
+forge-bridge pair my-laptop --base-url http://127.0.0.1:8787
+forge-bridge pair --devices                     # list paired devices
+forge-bridge pair --revoke <device_id>          # revoke a device
+
+# 3. Diagnostics — providers detected, auth states
 forge-bridge doctor
 forge-bridge providers
-
-# 3. Serve the local bridge (127.0.0.1 only)
-forge-bridge serve --port 8787
 
 # 4. From any client — bearer auth, agent-session surface
 TOKEN=$(cat ~/.forge-bridge/pair.token)

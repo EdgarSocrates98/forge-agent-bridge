@@ -5,6 +5,45 @@
   "cli": "forge-bridge",
   "python": ">=3.11",
   "version": "0.2.4",
+  "mcp_server_name": "forge-agent-bridge",
+  "mcp_command": [
+    "forge-bridge",
+    "mcp",
+    "serve"
+  ],
+  "mcp_verify_tool": "forge_health",
+  "installation_kind": "service",
+  "install": {
+    "operations": [
+      "plan",
+      "apply",
+      "status",
+      "doctor",
+      "uninstall"
+    ],
+    "flags": [
+      "--scope",
+      "--root",
+      "--profile",
+      "--components",
+      "--dry-run",
+      "--yes",
+      "--host",
+      "--gateway-profile"
+    ],
+    "scopes": [
+      "project",
+      "workspace",
+      "user"
+    ],
+    "profiles": [
+      "minimal",
+      "recommended",
+      "full"
+    ],
+    "approval": "--yes"
+  },
+  "depends_on": [],
   "install_command": [
     "forge-bridge",
     "install",

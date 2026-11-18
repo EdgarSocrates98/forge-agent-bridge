@@ -152,12 +152,17 @@ def test_runner_ssrf(srv):
         assert st == 422, ep
 
 
-def test_pair_rotation(srv):
+def test_pair_rotation(srv, tmp_path):
     port, tok, _ = srv
     st, r, _ = _req(port, tok, "POST", "/pair/rotate",
                     {"pair_token": tok})
-    assert st == 200 and r["pair_token"] != tok
+    # the new master never crosses the wire — path + hash only; the
+    # canonical token is the 0600 file the rotate wrote.
+    assert st == 200 and r["rotated"] is True
+    assert "pair_token" not in r and r["token_preview"]
+    new_tok = (tmp_path / "fb" / "pair.token").read_text().strip()
+    assert new_tok and new_tok != tok
     st, _, _ = _req(port, tok, "GET", "/status")
     assert st == 401  # old master dead
-    st, _, _ = _req(port, r["pair_token"], "GET", "/status")
+    st, _, _ = _req(port, new_tok, "GET", "/status")
     assert st == 200

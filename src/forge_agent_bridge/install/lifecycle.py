@@ -12,8 +12,19 @@ verified lands in `unverified`, never `applied`.
 Receipt contract (install-2.1): `forge/InstallReceipt/v1` — the schema the
 the-forge delegation verifier reads (`forge_id` + `operation="install"` +
 `status` + `verification.status="PASS"`). Bridge-specific detail rides in
-extra fields (`plan`, `applied`, `unverified`, `skipped`, `state_dir`, …);
-the pair TOKEN is never one of them — only its path and hashes.
+extra fields (`plan`, `applied`, `unverified`, `skipped`, `failed`,
+`state_dir`, …); the pair TOKEN is never one of them — only its path and
+hashes.
+
+Lifecycle (cycle-16.1 §5.3): every receipt and the doctor report carry a
+derived `forge/InstallLifecycle/v1` block (`planned`/`blocked`/`failed`/
+`applied`/`partially_applied`/`verified`/`unverified`/`ready`/`certified`)
+— same derivation the-forge re-applies federated. Honest-state rule:
+`UNVERIFIED` means *no proof either way* (e.g. the `forge-bridge` shim is
+not on this PATH — applied state, verification pending, never a failure);
+`FAIL` needs an observed error (e.g. a write that raised OSError). The
+previous federated run's UNVERIFIED-when-shim-absent verdict is the
+correct behavior — documented in README + CHANGELOG.
 
 `--root` semantics: the CLI flag is the install TARGET root (the-forge
 delegates `--root <workspace>`); state always lives under
@@ -59,8 +70,97 @@ DEFAULT_CONFIG = {
 }
 
 SCHEMA_RECEIPT = "forge/InstallReceipt/v1"
+LIFECYCLE_SCHEMA = "forge/InstallLifecycle/v1"
 _SCHEMA_DOCTOR = "forge/BridgeDoctorReport/v1"
 _SCHEMA_LEDGER = "forge/BridgeInstallLedger/v1"
+
+# forge/InstallLifecycle/v1 — closed state vocabulary (cycle 16.1 §5.3,
+# the-forge install/lifecycle.py). The lifecycle state is *derived* from
+# receipt/doctor evidence, never asserted: `verified`/`ready`/`certified`
+# are the only states that may back a success claim; `unverified` means
+# no proof either way — distinct from `failed`, which needs an observed
+# error. `applied` is writes-executed with verification pending.
+LIFECYCLE_STATES = (
+    "planned", "blocked", "failed", "applied", "partially_applied",
+    "verified", "unverified", "ready", "certified",
+)
+
+_BLOCKED_STATUSES = frozenset({"blocked", "refused", "unsupported"})
+_GATED_CHECKS = frozenset({"BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"})
+
+
+def _lifecycle_block(state: str, detail: str) -> dict[str, Any]:
+    """The additive ``forge/InstallLifecycle/v1`` envelope — same shape
+    the-forge attaches to its own receipts/health docs, derived here from
+    the document body so a verifier can re-derive and compare."""
+    return {"schema": LIFECYCLE_SCHEMA, "state": state, "detail": detail}
+
+
+def _receipt_lifecycle(doc: dict[str, Any]) -> dict[str, Any]:
+    """Derive the lifecycle state of a ``forge/InstallReceipt/v1`` doc —
+    mirrors the-forge's ``receipt_state`` so the emitted block always
+    agrees with the federated re-derivation."""
+    status = str(doc.get("status") or "")
+    verification = str((doc.get("verification") or {}).get("status") or "")
+    if status == "planned":
+        return _lifecycle_block("planned", "plan emitted — nothing written")
+    if status in _BLOCKED_STATUSES:
+        return _lifecycle_block("blocked", f"gate refusal: {status}")
+    if status == "completed":
+        if verification == "PASS":
+            return _lifecycle_block(
+                "verified", "writes executed and receipt checks pass")
+        if verification == "FAIL":
+            return _lifecycle_block(
+                "failed", "writes executed but verification failed")
+        return _lifecycle_block(
+            "applied", f"writes executed; verification "
+                       f"{verification or 'absent'}")
+    if status == "failed":
+        checks = [c for c in doc.get("checks") or [] if isinstance(c, dict)]
+        if checks and all(c.get("status") in _GATED_CHECKS for c in checks):
+            return _lifecycle_block("blocked",
+                                    "every check gated — nothing applied")
+        applied = sum(1 for c in checks if c.get("status") == "PASS")
+        return _lifecycle_block(
+            "failed", f"operation errored ({applied} check(s) passed)")
+    if status == "unverified" or not status:
+        return _lifecycle_block("unverified", "no operation evidence")
+    return _lifecycle_block(
+        "unverified",
+        f"status {status!r} outside the known receipt vocabulary")
+
+
+def _doctor_lifecycle(checks: list[dict[str, Any]], ok: bool) -> dict[str, Any]:
+    """Derive the lifecycle state of the doctor/health doc.
+
+    Finer than a status-string mapping on purpose: an absent state root
+    means *no installation evidence* (``unverified``), drift on a managed
+    file means ``partially_applied``, intact managed state with unproven
+    runtime probes (CLI on PATH, providers detected) is ``applied``, and
+    only a fully green doc is ``ready``."""
+    by = {str(c.get("check")): str(c.get("state")) for c in checks}
+    if by.get("state-root") != "ok":
+        return _lifecycle_block(
+            "unverified", "no state root — no installation evidence")
+    managed_bad = [name for name in
+                   ("pair-token", "pair-token-mode",
+                    "dir:events", "dir:backups", "ledger")
+                   if by.get(name) not in (None, "ok")]
+    if managed_bad:
+        return _lifecycle_block(
+            "partially_applied",
+            "managed drift: " + ", ".join(managed_bad))
+    if ok:
+        return _lifecycle_block(
+            "ready", "managed state verified; runtime probes green")
+    unproven = [name for name, state in by.items()
+                if state.startswith("unverified")
+                or (name == "providers-detected" and state.startswith("0/"))]
+    return _lifecycle_block(
+        "applied",
+        "managed state verified; unproven probes: "
+        + (", ".join(unproven) or "see checks"))
 
 # State-dir name used under every install target — matches the runtime
 # convention (`~/.forge-bridge`, local_bridge.resolve_state_dir()).
@@ -231,7 +331,7 @@ def install(*, scope: str = "user", profile: str = "recommended",
             if s["action"] in ("write-if-absent-0600", "write-snapshot",
                                "write-if-absent", "write")
         ] if dry_run else [],
-        "applied": [], "unverified": [], "skipped": [],
+        "applied": [], "unverified": [], "skipped": [], "failed": [],
         "yes": yes,
         "requested_host": host,
         "requested_gateway_profile": gateway_profile,
@@ -251,9 +351,10 @@ def install(*, scope: str = "user", profile: str = "recommended",
     if dry_run:
         receipt["receipt_id"] = "sha256:" + hashlib.sha256(
             json.dumps(steps, sort_keys=True).encode()).hexdigest()
+        receipt["lifecycle"] = _receipt_lifecycle(receipt)
         return receipt
 
-    applied, unverified, skipped = [], [], []
+    applied, unverified, skipped, failed_steps = [], [], [], []
     managed: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = list(receipt["checks"])
     ledger_files: list[dict[str, Any]] = []
@@ -319,15 +420,39 @@ def install(*, scope: str = "user", profile: str = "recommended",
                 p = Path(target)
                 p.parent.mkdir(parents=True, exist_ok=True)
                 existed = p.exists()
-                p.write_text(json.dumps(
-                    {"detected_at": time.time(), "providers": snap},
-                    indent=1))
-                applied.append({**s,
-                                "result": f"{len(snap)} providers detected"})
-                _managed(p, "updated" if existed else "created")
-                ledger_files.append({"path": p.name, "state": "managed"})
-                checks.append({"id": f"file:{p.name}", "status": "PASS",
-                               "detail": f"{len(snap)} providers detected"})
+                # incremental reinstall (§7.4): when detection yields the
+                # same snapshot, the unchanged file is preserved — its
+                # `detected_at` keeps meaning "when this content was
+                # observed". An unreadable file is rewritten (repair).
+                unchanged = False
+                if existed:
+                    try:
+                        prev = json.loads(p.read_text(encoding="utf-8"))
+                        unchanged = (isinstance(prev, dict)
+                                     and prev.get("providers") == snap)
+                    except (OSError, json.JSONDecodeError):
+                        unchanged = False
+                if unchanged:
+                    skipped.append({**s, "result": "unchanged"})
+                    _managed(p, "unchanged")
+                    ledger_files.append({"path": p.name,
+                                         "state": "preserved"})
+                    checks.append({"id": f"file:{p.name}", "status": "PASS",
+                                   "detail": f"preserved — detection "
+                                             f"unchanged ({len(snap)} "
+                                             "providers)"})
+                else:
+                    p.write_text(json.dumps(
+                        {"detected_at": time.time(), "providers": snap},
+                        indent=1))
+                    applied.append({**s,
+                                    "result": f"{len(snap)} providers "
+                                              "detected"})
+                    _managed(p, "updated" if existed else "created")
+                    ledger_files.append({"path": p.name, "state": "managed"})
+                    checks.append({"id": f"file:{p.name}", "status": "PASS",
+                                   "detail": f"{len(snap)} providers "
+                                             "detected"})
                 continue
             if action == "write-if-absent":
                 p = Path(target)
@@ -369,34 +494,53 @@ def install(*, scope: str = "user", profile: str = "recommended",
                 continue
             skipped.append({**s, "result": "no-handler"})
         except OSError as e:
-            unverified.append({**s, "result": f"unverified:{e}"})
-            checks.append({"id": f"{comp}:{action}", "status": "UNVERIFIED",
+            # An observed write error is evidence of failure — FAIL,
+            # never UNVERIFIED (which means "no proof either way").
+            failed_steps.append({**s, "result": f"failed:{e}"})
+            checks.append({"id": f"{comp}:{action}", "status": "FAIL",
                            "detail": str(e)})
 
-    failed = [c for c in checks if c["status"] == "FAIL"]
+    failed_checks = [c for c in checks if c["status"] == "FAIL"]
     uncertain = [c for c in checks if c["status"] == "UNVERIFIED"]
     receipt["applied"] = applied
     receipt["unverified"] = unverified
     receipt["skipped"] = skipped
+    receipt["failed"] = failed_steps
     receipt["managed_files"] = managed
     receipt["checks"] = checks
     receipt["verification"] = {
-        "status": "FAIL" if failed else
+        "status": "FAIL" if failed_checks else
                   "UNVERIFIED" if uncertain else "PASS"}
-    receipt["status"] = "completed"
+    # completed = the writer finished; failed = the operation errored.
+    # UNVERIFIED checks (e.g. CLI shim absent from PATH) degrade
+    # verification only — they are honest non-failures, never FAIL.
+    receipt["status"] = "failed" if failed_checks else "completed"
     receipt["installed_at"] = time.time()
     receipt["receipt_id"] = (
         "sha256:" + hashlib.sha256(json.dumps(
             {"f": managed}, sort_keys=True).encode()).hexdigest())
-    _write_receipt(root_dir, receipt)
+    receipt["lifecycle"] = _receipt_lifecycle(receipt)
+    try:
+        _write_receipt(root_dir, receipt)
+    except OSError as e:
+        # The stdout receipt remains the evidence of record — the-forge
+        # reads it before scanning <state>/receipts/. A failed persist is
+        # reported on the receipt, never a crash that hides the verdict.
+        receipt["receipt_persist"] = (
+            f"unverified: receipt file not written ({e}) — stdout "
+            "receipt is the evidence of record")
     return receipt
 
 
 def _write_receipt(state_dir: Path, receipt: dict[str, Any]) -> Path:
-    """`<state>/receipts/install-<ts>.json` — the `.<state>/receipts`
-    convention the-forge scans when stdout carries no receipt."""
+    """`<state>/receipts/install-<ts>-<id8>.json` — the `.<state>/receipts`
+    convention the-forge scans when stdout carries no receipt. The short
+    content-hash suffix keeps two installs in the same second from
+    clobbering each other's evidence when their content differs."""
     ts = receipt["created_at"].replace(":", "").replace("-", "")
-    path = state_dir / "receipts" / f"install-{ts}.json"
+    rid = str(receipt.get("receipt_id") or "")
+    suffix = rid.split(":", 1)[-1][:8] or "00000000"
+    path = state_dir / "receipts" / f"install-{ts}-{suffix}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(receipt, indent=1) + "\n", encoding="utf-8")
     return path
@@ -453,7 +597,8 @@ def doctor(*, scope: str = "user", root: Path | None = None) -> dict[str, Any]:
             "scope": scope, "checks": checks,
             "checked_at": _utc_now(),
             "overall": "ok" if ok else "incomplete",
-            "status": "healthy" if ok else "degraded"}
+            "status": "healthy" if ok else "degraded",
+            "lifecycle": _doctor_lifecycle(checks, ok)}
 
 
 def _ledger_removal_plan(root_dir: Path) -> tuple[list[str], str]:
@@ -539,4 +684,5 @@ def uninstall(*, scope: str = "user", root: Path | None = None,
     receipt["receipt_id"] = (
         "sha256:" + hashlib.sha256(json.dumps(
             {"r": removed, "k": kept}, sort_keys=True).encode()).hexdigest())
+    receipt["lifecycle"] = _receipt_lifecycle(receipt)
     return receipt

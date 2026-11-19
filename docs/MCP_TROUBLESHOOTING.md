@@ -37,6 +37,20 @@ requires-approval | error` with the reason.
 | `-32010` | policy denial | tool is disabled by the active profile |
 | `-32011` | workspace denial | path failed the guard — reason code tells why |
 
+## Declared-entry health (`config:*` checks)
+
+`mcp doctor` does more than detect the entry — it validates that the
+*declared* config can actually start our server:
+
+| `config:<target>` state | Meaning | Action |
+|---|---|---|
+| `ready` | command/args/profile verified on this machine | none |
+| `unverified` | entry absent, or plausible but unprovable here — bare command name not on this PATH, `env.PYTHONPATH` missing on this machine | if the entry exists and the host still can't start the server, re-run `mcp configure` with `--python <abs path>` |
+| `error` | structurally unable to start: non-`stdio` type, unknown `--profile`, args that don't launch `forge_agent_bridge.mcp` (or `forge-bridge mcp serve`), absolute `command` path that does not exist, unreadable JSON | fix or re-run `mcp configure`; hand-edits are the usual cause |
+
+`mcp status` reports *presence* only — a present-but-broken entry is
+`configured: true` there and `error` in `mcp doctor`.
+
 ## Config writers
 
 - `skipped:file-not-writable` → the target is managed/read-only; the

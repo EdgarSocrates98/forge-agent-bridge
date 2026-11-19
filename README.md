@@ -48,6 +48,14 @@ forge-bridge mcp status                          # where entries exist
 forge-bridge mcp tools                           # the catalog
 ```
 
+`mcp status` reports *presence*; `mcp doctor` reports *health* — for
+every declared `forgeAgentBridge` entry it validates the config can
+actually start our server: `ready` (command/args/profile verified
+here), `unverified` (plausible but unprovable from this machine — e.g.
+a bare command name not on this PATH), `error` (structurally unable to
+start: bad profile, args that don't launch `forge_agent_bridge.mcp`, a
+declared absolute command that does not exist, unreadable file).
+
 Docs: [MCP_NATIVE_ARCHITECTURE](docs/MCP_NATIVE_ARCHITECTURE.md) ·
 [PROTOCOL_COMPATIBILITY](docs/MCP_PROTOCOL_COMPATIBILITY.md) ·
 [CORPORATE_SECURITY](docs/MCP_CORPORATE_SECURITY.md) ·
@@ -135,8 +143,31 @@ State root by scope: `user` → `~/.forge-bridge` (or `$FAB_STATE_DIR`),
 Every install/apply/dry-run/uninstall writes a
 `forge/InstallReceipt/v1` under `<state>/receipts/` — the envelope The
 Forge's delegated verification consumes (`operation`, `status`,
-`verification.status`). The master pair token is never embedded in
-receipts, logs or audit records — only its path and hash-prefix.
+`verification.status`). Each receipt and each `install-status`/doctor
+report also carries a derived `forge/InstallLifecycle/v1` block
+(`planned` · `blocked` · `failed` · `applied` · `partially_applied` ·
+`verified` · `unverified` · `ready` · `certified`) — the same closed
+vocabulary the control plane re-derives federated. The master pair
+token is never embedded in receipts, logs or audit records — only its
+path and hash-prefix.
+
+Honest states, two that must never blur:
+
+- `UNVERIFIED` = *no proof either way* — e.g. the `forge-bridge` shim is
+  absent from PATH on this machine. The federated install verify path
+  reports this as `unverified` (**not** `failed`): state was written,
+  service verification is pending. This is the correct, documented
+  behavior — it means "run the bootstrap installer", not "the install
+  broke".
+- `FAIL` = *observed error* — e.g. a write that raised `OSError`.
+  Reported as `status: "failed"` + `verification.status: "FAIL"` →
+  lifecycle `failed`.
+
+Reinstalls are incremental (§7.4): preserved files
+(`pair.token`, `.gitignore`, `config.json`, an unchanged
+`providers.json` detection snapshot) are never rewritten — verified by
+hash-compare tests; only the ledger (`components.json`) and the new
+receipt change per run.
 
 `forge-bridge serve --state-dir <dir>` (or `$FAB_STATE_DIR`) points the
 runtime at a scoped state root, so `project`/`workspace` installs are
@@ -268,14 +299,14 @@ src/forge_agent_bridge/
   acp.py            # ACP stdio JSON-RPC client (Devin)
   cli.py            # forge-bridge status|doctor|providers|sessions|pair|serve
   providers/        # claude.py, codex.py, acp_adapter.py, fake.py
-tests/              # test_cycle19 … test_cycle24 (35 tests)
+tests/              # bridge, install lifecycle, MCP, provider harness (228 tests)
 docs/               # CAPABILITY_MATRIX, HOMOLOGATION, ADR-001, API, PROVIDERS, SECURITY
 ```
 
 ## Development
 
 ```bash
-python -m pytest -q            # 35 tests
+python -m pytest -q            # 228 tests
 python -m ruff check src tests # lint
 forge-bridge doctor            # environment diagnostics
 ```

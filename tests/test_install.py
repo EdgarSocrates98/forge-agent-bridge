@@ -250,6 +250,165 @@ def test_doctor_providers_aggregate_dynamic(tmp_path, monkeypatch):
     assert prov["state"].endswith("/5 executables")
 
 
+# ---------------------------------------------------------------------
+# cycle-16.1 wave-08 — forge/InstallLifecycle/v1 + honest FAIL vs
+# UNVERIFIED + incremental reinstall (§5.3/§7.4)
+# ---------------------------------------------------------------------
+
+def _which_none(_name):
+    return None
+
+
+def _which_bridge(name):
+    return "/usr/local/bin/forge-bridge" if name == "forge-bridge" else None
+
+
+def test_lifecycle_block_schema_and_states(tmp_path):
+    """Every receipt carries a derived forge/InstallLifecycle/v1 block in
+    the closed vocabulary."""
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=tmp_path / "fb", dry_run=True)
+    lc = r["lifecycle"]
+    assert lc["schema"] == "forge/InstallLifecycle/v1"
+    assert lc["state"] in lifecycle.LIFECYCLE_STATES
+    assert lc["state"] == "planned"
+
+
+def test_lifecycle_applied_when_service_unverified(tmp_path, monkeypatch):
+    """Shim absent from PATH → verification UNVERIFIED → lifecycle
+    `applied` (writes executed, verification pending) — NOT failed."""
+    monkeypatch.setattr("shutil.which", _which_none)
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=tmp_path / "fb", yes=True)
+    assert r["status"] == "completed"
+    assert r["verification"]["status"] == "UNVERIFIED"
+    assert r["lifecycle"]["state"] == "applied"
+    assert not r["failed"]
+
+
+def test_lifecycle_verified_when_all_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", _which_bridge)
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=tmp_path / "fb", yes=True)
+    assert r["verification"]["status"] == "PASS"
+    assert r["status"] == "completed"
+    assert r["lifecycle"]["state"] == "verified"
+
+
+def test_fail_distinct_from_unverified(tmp_path, monkeypatch):
+    """An observed write error is FAIL/failed — evidence of failure —
+    never UNVERIFIED (absence of proof). The two states must not blur."""
+    monkeypatch.setattr("shutil.which", _which_none)
+    # root is a FILE → every mkdir/write under it raises OSError
+    blocker = tmp_path / "fb"
+    blocker.write_text("not a dir")
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=blocker, yes=True)
+    assert r["status"] == "failed"
+    assert r["verification"]["status"] == "FAIL"
+    assert r["lifecycle"]["state"] == "failed"
+    assert r["failed"] and all("failed:" in s["result"] for s in r["failed"])
+    assert not any(c["status"] == "UNVERIFIED" for c in r["checks"]
+                   if c["id"].startswith(("mkdir:", "file:")))
+    # …and the honest non-failure case stays UNVERIFIED, not FAIL
+    ok = lifecycle.install(scope="user", profile="recommended",
+                           root=tmp_path / "ok", yes=True)
+    assert ok["verification"]["status"] == "UNVERIFIED"
+    assert ok["status"] == "completed"
+    assert not ok["failed"]
+
+
+def test_uninstall_receipt_has_lifecycle(tmp_path):
+    lifecycle.install(scope="user", profile="recommended",
+                      root=tmp_path / "fb", yes=True)
+    r = lifecycle.uninstall(scope="user", root=tmp_path / "fb", yes=True)
+    assert r["lifecycle"]["schema"] == "forge/InstallLifecycle/v1"
+    assert r["lifecycle"]["state"] == "verified"
+
+
+def test_doctor_lifecycle_states(tmp_path, monkeypatch):
+    # nothing installed → unverified (no installation evidence)
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    assert d["lifecycle"]["state"] == "unverified"
+    # installed, CLI shim not on PATH → applied (managed state verified,
+    # service probe unproven) — distinct from failed/partially_applied
+    monkeypatch.setattr("shutil.which", _which_none)
+    lifecycle.install(scope="user", profile="recommended",
+                      root=tmp_path / "fb", yes=True)
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    assert d["lifecycle"]["state"] == "applied"
+    # managed drift → partially_applied
+    import shutil as _sh
+    _sh.rmtree(tmp_path / "fb" / "events")
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    assert d["lifecycle"]["state"] == "partially_applied"
+    # everything green → ready
+    (tmp_path / "fb" / "events").mkdir()
+    monkeypatch.setattr("shutil.which", _which_bridge)
+    d = lifecycle.doctor(scope="user", root=tmp_path / "fb")
+    if d["overall"] == "ok":
+        assert d["lifecycle"]["state"] == "ready"
+    else:
+        # providers-detected=0 is an environment fact, still not failed
+        assert d["lifecycle"]["state"] == "applied"
+
+
+def test_incremental_reinstall_hash_compare(tmp_path, monkeypatch):
+    """§7.4: repeated installs never rewrite unchanged assets. Hash-
+    compare across two applies: preserved files byte-identical, only the
+    ledger + receipts change."""
+    import hashlib
+    root = tmp_path / "fb"
+
+    def sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    lifecycle.install(scope="user", profile="full", root=root, yes=True)
+    before = {n: sha(root / n) for n in
+              ("pair.token", ".gitignore", "config.json", "providers.json")}
+    ledger1 = sha(root / "components.json")
+    r2 = lifecycle.install(scope="user", profile="full", root=root, yes=True)
+    after = {n: sha(root / n) for n in before}
+    assert after == before                       # nothing rewritten
+    assert sha(root / "components.json") != ledger1  # ledger records the run
+    prov = [s for s in r2["skipped"]
+            if s["action"] == "write-snapshot"]
+    assert prov and prov[0]["result"] == "unchanged"
+    assert r2["managed_files"]                   # still fully inventoried
+    # each run persists its own receipt — no same-second clobbering
+    receipts = sorted((root / "receipts").glob("install-*.json"))
+    assert len(receipts) == 2
+    assert receipts[0].name != receipts[1].name
+
+
+def test_incremental_reinstall_updates_changed_detection(tmp_path,
+                                                         monkeypatch):
+    """A changed provider detection IS rewritten — hash drifts exactly
+    when content drifts."""
+    import hashlib
+    root = tmp_path / "fb"
+    lifecycle.install(scope="user", profile="recommended",
+                      root=root, yes=True)
+    before = hashlib.sha256((root / "providers.json").read_bytes())
+    from forge_agent_bridge.registry import REGISTRY
+
+    class _Det:
+        def __init__(self, i):
+            self._i = i
+
+        def model_dump(self, **_):
+            return {"id": f"fake-{self._i}"}
+
+    monkeypatch.setattr(REGISTRY, "detect_all",
+                        lambda *a, **k: [_Det(i) for i in range(7)])
+    r = lifecycle.install(scope="user", profile="recommended",
+                          root=root, yes=True)
+    doc = json.loads((root / "providers.json").read_text())
+    assert len(doc["providers"]) == 7
+    assert hashlib.sha256((root / "providers.json").read_bytes()) != before
+    assert any(s["action"] == "write-snapshot" for s in r["applied"])
+
+
 def test_doctor_zero_executables_not_ok(tmp_path, monkeypatch):
     lifecycle.install(scope="user", profile="minimal",
                       root=tmp_path / "fb", yes=True)

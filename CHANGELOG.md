@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — Cycle 16.1, Wave 08 (InstallLifecycle/v1 + honest states)
+
+### Added
+- `forge/InstallLifecycle/v1` block on every receipt
+  (install/apply/dry-run/uninstall) and on the `install-status`/doctor
+  report — a *derived* state in the closed vocabulary
+  (`planned`/`blocked`/`failed`/`applied`/`partially_applied`/`verified`/
+  `unverified`/`ready`/`certified`), matching the derivation The Forge
+  re-applies federated. Receipt `status` stays coarse (`planned`/
+  `completed`/`failed`) — the lifecycle is the finer, honest position.
+- `failed` bucket on apply receipts — observed write errors land there,
+  distinct from `unverified` (absence of proof).
+- `mcp doctor` now validates each *declared* `forgeAgentBridge` entry
+  (§9.3 — "can this config actually start our server?"): `ready` when
+  command/args/profile verify on this machine, `error` for structurally
+  wrong entries (non-stdio type, bad profile, args that don't launch
+  `forge_agent_bridge.mcp`, absolute command path that does not exist,
+  unreadable file), `unverified` for the plausible-but-unprovable (bare
+  command name off this PATH, `env.PYTHONPATH` absent here).
+
+### Changed
+- Observed write errors (`OSError`) during apply now report check
+  `FAIL` → `verification: "FAIL"` → `status: "failed"` → lifecycle
+  `failed`. Previously they were reported `UNVERIFIED`, which blurred
+  *absence of proof* with *evidence of failure*. The shim-not-on-PATH
+  case stays `UNVERIFIED` — the correct federated verdict.
+- Incremental reinstall (§7.4): `providers.json` is preserved when the
+  provider detection snapshot is unchanged — repeated installs no
+  longer rewrite unchanged assets (hash-compare tested). Unchanged
+  `pair.token`/`.gitignore`/`config.json` were already preserved.
+- Persisted receipts are named `install-<ts>-<id8>.json` — a content-
+  hash suffix prevents two installs in the same second from clobbering
+  each other's evidence.
+- A failure writing the persisted receipt file is reported on the
+  receipt (`receipt_persist`) instead of crashing — the stdout receipt
+  remains the evidence of record.
+
 ## Unreleased — Cycle 16, Wave 07 (install-2.1 delegation contract)
 
 ### Added

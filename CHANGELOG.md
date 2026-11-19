@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Cycle 16.1.1, Wave 07c (vendored fixes)
+
+### Fixed
+- `setup.sh`: python probe tolerates all-missing (`|| true`) — under
+  `set -euo pipefail` it exited `rc=1` silently before
+  `FORGE-PYTHON-NOT-FOUND` (vendored defect; canonical fix in
+  the-forge wave-01). Regression: `tests/test_setup_scripts.py`.
+- `ui/{kit,i18n,wizard}.py` re-vendored to canonical the-forge — all
+  three had drifted (kit lacked the `installation` consolidated-plan
+  block and lifecycle states); a repo-local parity test now covers the
+  vendored copies (bridge sits outside `KIT_PARITY_REPOS`).
+
 ## Unreleased — Cycle 16.1, Wave 08 (InstallLifecycle/v1 + honest states)
 
 ### Added

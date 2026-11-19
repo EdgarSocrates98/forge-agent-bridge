@@ -93,7 +93,11 @@ def status_cmd() -> None:
 
     from . import config as cfg
     found = []
+    seen: set[Path] = set()
     for t in cfg.targets(None) + cfg.targets(Path.cwd()):
+        if t.path in seen:
+            continue  # the user-scope file appears in both target lists
+        seen.add(t.path)
         if t.path.is_file():
             try:
                 doc = _j.loads(t.path.read_text(encoding="utf-8"))

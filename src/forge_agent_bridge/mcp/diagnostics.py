@@ -26,6 +26,82 @@ def _check(name: str, state: str, detail: str = "") -> dict[str, Any]:
     return {"check": name, "state": state, "detail": detail}
 
 
+def _declared_entry_state(entry: Any) -> tuple[str, str]:
+    """Validate a configured ``mcpServers``/``servers`` entry — §9.3 MCP
+    health: the declared config must actually be able to start our server.
+
+    ``error``      — structurally wrong (not an object, non-stdio type,
+                     args that don't launch the bridge module, unknown
+                     profile, absolute command path that does not exist).
+    ``unverified`` — plausible but unprovable here (bare command name not
+                     on this PATH — the host may resolve differently;
+                     PYTHONPATH dir absent on this machine).
+    ``ready``      — every declared field verified against this machine.
+    """
+    if not isinstance(entry, dict):
+        return "error", "entry is not an object"
+    problems: list[str] = []
+    unverified: list[str] = []
+    etype = entry.get("type")
+    if etype is not None and etype != "stdio":
+        problems.append(f"type {etype!r} != 'stdio'")
+    cmd = entry.get("command")
+    if not isinstance(cmd, str) or not cmd:
+        problems.append("missing/invalid command")
+    else:
+        if os.path.isabs(cmd) or os.sep in cmd or (os.altsep and os.altsep in cmd):
+            if not Path(cmd).is_file():
+                problems.append(f"declared command {cmd!r} does not exist")
+        elif shutil.which(cmd) is None:
+            unverified.append(
+                f"command {cmd!r} not on this PATH — host may resolve "
+                "differently")
+    args = entry.get("args")
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        problems.append("missing/invalid args")
+    else:
+        module_entry = "forge_agent_bridge.mcp" in args
+        cli_entry = (isinstance(cmd, str)
+                     and Path(cmd).name.startswith("forge-bridge")
+                     and args[:2] == ["mcp", "serve"])
+        if not (module_entry or cli_entry):
+            problems.append("args do not launch the bridge MCP module")
+        elif "--profile" in args:
+            try:
+                resolve_profile(args[args.index("--profile") + 1])
+            except (ValueError, IndexError):
+                problems.append("declared --profile is not a known profile")
+        env = entry.get("env")
+        if isinstance(env, dict):
+            pp = env.get("PYTHONPATH")
+            if isinstance(pp, str) and pp and not Path(pp).is_dir():
+                unverified.append(
+                    f"env.PYTHONPATH {pp!r} absent on this machine")
+    if problems:
+        return "error", "; ".join(problems)
+    if unverified:
+        return "unverified", "; ".join(unverified)
+    return "ready", "declared entry verified (command/args/profile)"
+
+
+def _config_check(t) -> dict[str, Any]:
+    """One ``config:<target-id>`` check — presence *and* declared-entry
+    health, honest about what cannot be proven from this machine."""
+    if not t.path.is_file():
+        return _check(f"config:{t.id}", "unverified", f"{t.path} absent")
+    try:
+        doc = json.loads(t.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return _check(f"config:{t.id}", "error",
+                      f"unreadable: {type(e).__name__}")
+    servers = doc.get(t.top_key)
+    if cfg.SERVER_NAME not in (servers or {}):
+        return _check(f"config:{t.id}", "unverified",
+                      f"{t.path} (no entry)")
+    state, detail = _declared_entry_state(servers[cfg.SERVER_NAME])
+    return _check(f"config:{t.id}", state, f"{t.path} — {detail}")
+
+
 def doctor(*, profile: str | None, workspace: str | None,
            state_dir: Path | None = None) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
@@ -89,19 +165,9 @@ def doctor(*, profile: str | None, workspace: str | None,
 
     ws_path = Path(ws) if ws else None
     for t in targets(ws_path):
-        if t.path.is_file():
-            try:
-                doc = json.loads(t.path.read_text(encoding="utf-8"))
-                has = cfg.SERVER_NAME in (doc.get(t.top_key) or {})
-                checks.append(_check(
-                    f"config:{t.id}", "ready" if has else "unverified",
-                    f"{t.path} ({'configured' if has else 'no entry'})"))
-            except (OSError, json.JSONDecodeError) as e:
-                checks.append(_check(f"config:{t.id}", "error",
-                                     f"unreadable: {type(e).__name__}"))
-        else:
-            checks.append(_check(f"config:{t.id}", "unverified",
-                                 f"{t.path} absent"))
+        checks.append(_config_check(t))
+        if checks[-1]["state"] == "error":
+            ok = False
 
     overall = "ready" if ok and all(
         c["state"] in ("ready", "unverified") for c in checks) else \

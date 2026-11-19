@@ -53,8 +53,10 @@ and needs no third-party wheel to serve.
 ```bash
 forge-bridge mcp configure --workspace /path/to/workspace --dry-run
 forge-bridge mcp configure --workspace /path/to/workspace
-forge-bridge mcp status     # verify entries
-forge-bridge mcp doctor     # honest readiness per check
+forge-bridge mcp status     # where entries exist (presence)
+forge-bridge mcp doctor     # honest health per check — validates the
+                            # *declared* entry can start our server:
+                            # ready | unverified | error per config:* check
 ```
 
 Targets written: `~/.copilot/mcp-config.json` (`mcpServers`),
